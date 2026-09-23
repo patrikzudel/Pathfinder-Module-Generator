@@ -139,6 +139,8 @@
   <aside class="left" id="workflow" tabindex="-1" aria-label="Module workflow">
     <div class="section">
       <h2>1 · Load mouse model</h2>
+      <button id="resetAll" type="button" class="danger" style="width:100%;margin-bottom:8px;background:var(--bad);border-color:var(--bad);color:#fffdf5">Reset all</button>
+      <p id="sessionStatus" class="hint" role="status"></p>
       <div id="drop" class="drop" role="button" tabindex="0" aria-label="Choose a mouse model file"><div><strong>Drop an STL, OBJ, GLB or GLTF</strong><br><span class="small">or click to choose a file</span></div></div>
       <input id="fileInput" type="file" accept=".stl,.obj,.glb,.gltf" hidden />
       <div class="row" style="margin-top:8px">
@@ -590,6 +592,7 @@ async function loadPathfinderCore(file,{activate=true}={}){
     if(activate)$('corePreviewMode').checked=true;$('coreLoadFallback').hidden=true;refreshSceneVisibility();if(corePreviewActive())fitCoreAssembly();
     const likelyMm=size.y>80&&size.y<150&&size.x>35&&size.x<80;
     log(`Pathfinder Core loaded at native coordinates (${formatNum(size.x)} × ${formatNum(size.y)} × ${formatNum(size.z)} mm).${likelyMm?'':' Dimensions are unusual; confirm this STL is in millimetres.'}`,likelyMm?'ok':'warning');
+    await persistCoreSession(file);
   }catch(e){console.error(e);$('coreLoadFallback').hidden=false;$('corePreviewMode').checked=false;refreshSceneVisibility();setCoreStatus(`Core preview unavailable: ${e.message}`,!!state.core);log(`Core preview load failed: ${e.message}`,'error')}
   finally{$('coreFileInput').value=''}
 }
@@ -701,11 +704,12 @@ async function loadMouse(file){
     state.sourceShells.forEach(shell=>shell.geometry.dispose());state.sourceShells=analysis.shells;state.autoShellIndex=analysis.auto;state.selectedShellIndex='auto';
     if(state.mouse){transform.detach();scene.remove(state.mouse);state.mouse.geometry.dispose();state.mouse.material.dispose()}
     const mat=sourceMouseMaterial();
-    const initialSurface=analysis.shells[analysis.auto].geometry.clone();const mesh=new THREE.Mesh(initialSurface,mat);mesh.name=file.name;state.modelFile={name:file.name,size:file.size,type:file.type,lastModified:file.lastModified};const unit=+$('units').value;mesh.scale.setScalar(unit);mesh.userData.unit=unit;scene.add(mesh);state.mouse=mesh;centerAndGroundMouse();state.mouseRevision++;invalidatePreview(true);setAlignmentLocked(false);syncTransformFields();updateSourceShellUI();
+    const initialSurface=analysis.shells[analysis.auto].geometry.clone();const mesh=new THREE.Mesh(initialSurface,mat);mesh.name=file.name;state.modelFile={name:file.name,size:file.size,type:file.type,lastModified:file.lastModified};const unit=+$('units').value;mesh.scale.setScalar(unit);mesh.userData.unit=unit;scene.add(mesh);state.mouse=mesh;state.sessionModelId=crypto.randomUUID();centerAndGroundMouse();state.mouseRevision++;invalidatePreview(true);setAlignmentLocked(false);syncTransformFields();updateSourceShellUI();
     const b=new THREE.Box3().setFromObject(mesh),s=b.getSize(new THREE.Vector3());$('mouseInfo').textContent=`${file.name} · ${formatNum(g.getAttribute('position').count/3,0)} source triangles · ${formatNum(s.x)} × ${formatNum(s.y)} × ${formatNum(s.z)} mm · ${analysis.shells.length} connected surface${analysis.shells.length===1?'':'s'}`;
     const auto=analysis.shells[analysis.auto];if(analysis.shells.length>1)log(`Detected ${analysis.shells.length} connected source surfaces. Auto selected Shell ${analysis.auto+1}: it encloses ${auto.contains} other shell${auto.contains===1?'':'s'} and has the largest outer volume (${formatNum(auto.volume*Math.pow(unit,3),1)} mm³). Inner/secondary surfaces are discarded before shell generation.`,'warning');
     $('generate').disabled=true;$('previewFit').disabled=true;invalidatePreview(true);refreshSceneVisibility();if(corePreviewActive())fitCoreAssembly();else fitObject(mesh);log('Mouse loaded, centered on X/Y and placed on Z=0. Adjust its alignment, then click Preprocess mouse.','ok');
     updatePreprocessButton();setModelProgress(0,'Ready to position','Align the mouse, then click Preprocess mouse.','done');
+    await persistMouseSession(file);
   }catch(e){console.error(e);log(`Mouse load failed: ${e.message}`,'error')}
 }
 const drop=$('drop'),fileInput=$('fileInput');drop.onclick=()=>fileInput.click();drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();fileInput.click()}};fileInput.onchange=()=>fileInput.files[0]&&loadMouse(fileInput.files[0]);
@@ -737,7 +741,7 @@ function handleMouseTransformChange(){
   if(state.alignmentLocked)return;
   const before=state.transformKey;syncTransformFields();
   const rebuild=before!==state.transformKey;invalidatePreview(rebuild);
-  if(!rebuild&&!state.positioning)scheduleLivePreview();
+  if(!rebuild&&!state.positioning)scheduleLivePreview();scheduleSessionSettings();
 }
 
 function syncTransformFields(){if(!state.mouse)return;const m=state.mouse;$('px').value=m.position.x.toFixed(3);$('py').value=m.position.y.toFixed(3);$('pz').value=m.position.z.toFixed(3);$('rx').value=THREE.MathUtils.radToDeg(m.rotation.x).toFixed(2);$('ry').value=THREE.MathUtils.radToDeg(m.rotation.y).toFixed(2);$('rz').value=THREE.MathUtils.radToDeg(m.rotation.z).toFixed(2);$('sx').value=m.scale.x.toFixed(4);$('sy').value=m.scale.y.toFixed(4);$('sz').value=m.scale.z.toFixed(4);state.transformKey=cacheKey()}
@@ -995,7 +999,7 @@ function updatePreprocessButton(){
   button.classList.toggle('danger',!!(state.preprocessPromise||state.preprocessReady));
 }
 $('preprocess').onclick=()=>{
-  if(state.preprocessPromise||state.preprocessReady){state.humpCache=null;invalidatePreview(true);setModelProgress(0,'Preprocessing cleared','Position the mouse, then click Preprocess mouse when ready.','done');return}
+  if(state.preprocessPromise||state.preprocessReady){state.humpCache=null;invalidatePreview(true);clearSavedPreprocessing();setModelProgress(0,'Preprocessing cleared','Position the mouse, then click Preprocess mouse when ready.','done');return}
   preprocessSelectedSurface(true).catch(console.error);
 };
 function preprocessSelectedSurface(autoPreview=true){
@@ -1041,6 +1045,7 @@ async function runPreprocessing(autoPreview=true){
     state.localCache={key,mouse,wall,wallVolume,sideProjection};state.preprocessReady=true;$('previewFit').disabled=false;
     finishModelProgress(`Exterior-only side envelopes + ${formatNum(t,2)} mm hump wall cached. Translation, symmetry and primary-side changes reuse preprocessing. After rotation, Preprocess mouse rebuilds only side projections and reuses the hump wall. Scale, surface or wall-thickness changes require a new wall.`);
     log('Model preprocessing complete. Side modules now ignore all geometry hidden behind the visible ±X exterior surface.','ok');
+    await persistPreprocessing();
     if(autoPreview)scheduleLivePreview(80);return state.localCache;
   }catch(e){if(token===state.preprocessToken){state.preprocessReady=false;$('previewFit').disabled=true;setModelProgress(0,'Preprocessing failed',e.message,'done');log(`Model preprocessing failed: ${e.message}`,'error')}if(isFatalKernelError(e))await recoverKernel(e);else{disposeManifold(mouse);disposeManifold(wall);disposeProjectionCache(sideProjection)}if(token!==state.preprocessToken&&!isFatalKernelError(e))return null;throw e}finally{scaled?.dispose()}
 }
@@ -1962,9 +1967,207 @@ $('outputs').addEventListener('click',e=>{const n=e.target.dataset.download;if(n
 
 window.addEventListener('keydown',e=>{if(e.target.matches('input,select'))return;if(e.key==='w')document.querySelector('[data-mode=translate]').click();if(e.key==='e')document.querySelector('[data-mode=rotate]').click();if(e.key==='r')document.querySelector('[data-mode=scale]').click()});
 window.__PATHFINDER_APP_VERSION__='15.2.0';
-window.__PATHFINDER_INTERNALS__={finalizePrintableHump,extraFootPillar,debugSettingsInfo,optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
+window.__PATHFINDER_INTERNALS__={sessionSettings,persistPreprocessing,saveSessionSettings,finalizePrintableHump,extraFootPillar,debugSettingsInfo,optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
 window.__PATHFINDER_STATE__=state;
-initLibrariesAndTemplate();
+// Bump this when preprocessing geometry or its coordinate convention changes.
+const SESSION_SCHEMA=1,PREPROCESS_SCHEMA='exterior-projection-hump-v1';
+const SESSION_SETTINGS_KEY='pathfinder-session-settings';
+const SESSION_RESTORE_MARKER='pathfinder-session-restore-pending';
+let sessionRestoring=true,sessionResetting=false,sessionExpectedModel=null,sessionSaveTimer=null,sessionDBPromise=null,sessionWrites=Promise.resolve();
+function sessionDB(){
+  return sessionDBPromise??=new Promise((resolve,reject)=>{
+    const request=indexedDB.open('pathfinder-session',1);
+    request.onupgradeneeded=()=>request.result.createObjectStore('session');
+    request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();sessionDBPromise=null};resolve(db)};
+    request.onerror=()=>{sessionDBPromise=null;reject(request.error)};
+  });
+}
+async function sessionTransaction(mode,action){
+  const db=await sessionDB();
+  return new Promise((resolve,reject)=>{
+    const tx=db.transaction('session',mode),store=tx.objectStore('session');let request;
+    try{request=action(store)}catch(error){tx.abort();reject(error);return}
+    tx.oncomplete=()=>resolve(request?.result);
+    tx.onerror=tx.onabort=()=>reject(tx.error||new Error('Session storage transaction failed.'));
+  });
+}
+function queueSessionWrite(action){
+  const job=sessionWrites.catch(()=>{}).then(()=>sessionTransaction('readwrite',action));
+  sessionWrites=job;
+  return job;
+}
+function sessionStorageError(error){
+  $('sessionStatus').textContent='Could not save this session in browser storage. '+(error?.message||'Storage is unavailable.');
+  log($('sessionStatus').textContent,'warning');
+}
+function sessionSettings(){
+  const controls={};
+  for(const input of document.querySelectorAll('input[id],select[id]')){
+    if(input.type==='file'||input.id.startsWith('extraFoot-'))continue;
+    controls[input.id]=input.type==='checkbox'?input.checked:input.value;
+  }
+  const m=state.mouse;
+  return {schema:SESSION_SCHEMA,controls,modelId:state.sessionModelId||null,mouseRevision:state.mouseRevision,
+    alignment:m?{position:m.position.toArray(),quaternion:m.quaternion.toArray(),scale:m.scale.toArray(),basis:state.alignmentBasis,unit:m.userData.unit}:null,
+    locked:state.alignmentLocked,mode:transform.getMode(),skirt:skirtSettings(),coreSaved:!!state.core,
+    camera:{position:camera.position.toArray(),target:orbit.target.toArray(),up:camera.up.toArray(),near:camera.near,far:camera.far}};
+}
+function saveSessionSettings(){
+  // A transient startup/storage failure must not overwrite the saved model reference.
+  if(sessionRestoring||sessionResetting||!state.ready||(sessionExpectedModel&&!state.mouse))return;
+  try{localStorage.setItem(SESSION_SETTINGS_KEY,JSON.stringify(sessionSettings()))}catch(error){sessionStorageError(error)}
+}
+function scheduleSessionSettings(){
+  if(sessionRestoring||sessionResetting)return;
+  clearTimeout(sessionSaveTimer);sessionSaveTimer=setTimeout(saveSessionSettings,150);
+}
+async function persistMouseSession(file){
+  if(sessionRestoring||sessionResetting)return;
+  const id=state.sessionModelId;
+  $('sessionStatus').textContent='Saving mouse model…';
+  try{
+    await queueSessionWrite(store=>{store.put({id,file,metadata:state.modelFile},'model');store.delete('preprocessing')});
+    if(id!==state.sessionModelId||sessionResetting)return;
+    saveSessionSettings();$('sessionStatus').textContent='Session saved in this browser.';
+  }catch(error){sessionStorageError(error)}
+}
+async function persistPreprocessing(){
+  if(sessionRestoring||sessionResetting||!state.preprocessReady)return;
+  const cache=state.localCache;
+  const meshes=cache.meshes||{mouse:snapshotSolid(cache.mouse),wall:snapshotSolid(cache.wall),
+    ...Object.fromEntries(['plus','minus','mirrorPlusFromMinus','mirrorMinusFromPlus'].map(key=>[key,snapshotSolid(cache.sideProjection[key])]))};
+  const record={schema:PREPROCESS_SCHEMA,modelId:state.sessionModelId,key:cache.key,meshes,grid:cache.sideProjection.grid,wallVolume:cache.wallVolume,humpCache:state.humpCache};
+  $('sessionStatus').textContent='Saving preprocessed model…';
+  try{
+    await queueSessionWrite(store=>store.put(record,'preprocessing'));
+    if(sessionResetting)return;
+    saveSessionSettings();$('sessionStatus').textContent='Session and preprocessed model saved in this browser.';
+  }catch(error){sessionStorageError(error)}
+}
+async function persistCoreSession(file){
+  if(sessionRestoring||sessionResetting)return;
+  try{await queueSessionWrite(store=>store.put(file,'core'));saveSessionSettings()}catch(error){sessionStorageError(error)}
+}
+function clearSavedPreprocessing(){
+  if(sessionRestoring||sessionResetting)return;
+  queueSessionWrite(store=>store.delete('preprocessing')).catch(sessionStorageError);
+}
+function applySavedControls(controls){
+  for(const [id,value] of Object.entries(controls||{})){
+    const input=$(id);
+    if(!input||!input.matches('input,select')||input.type==='file')continue;
+    if(input.type==='checkbox')input.checked=!!value;else input.value=String(value);
+  }
+}
+function lockSessionControls(locked){
+  // Keep Reset all usable while asynchronous restoration is waiting.
+  for(const section of $('workflow').children){
+    if(section.contains($('resetAll'))){
+      for(const child of section.children)child.inert=locked&&!['resetAll','sessionStatus'].includes(child.id)&&child.tagName!=='H2';
+    }else section.inert=locked;
+  }
+}
+async function restoreSession(){
+  if(sessionResetting)return;
+  try{
+    const interrupted=localStorage.getItem(SESSION_RESTORE_MARKER);
+    if(interrupted){
+      // Do not open IndexedDB here: it may be the operation that hung.
+      // Removing the settings reference quarantines the old model/cache.
+      localStorage.removeItem(SESSION_SETTINGS_KEY);localStorage.removeItem('pathfinder-ui-mode');
+      localStorage.removeItem(SESSION_RESTORE_MARKER);setUIMode('simple');
+      $('sessionStatus').textContent=interrupted==='reset'?'Session reset. Import a model to begin.':'The previous restore was interrupted. Started fresh; import your model again.';
+      log($('sessionStatus').textContent,'warning');return;
+    }
+    const raw=localStorage.getItem(SESSION_SETTINGS_KEY);if(!raw)return;
+    // A synchronous freeze cannot run a timeout. This durable marker lets the
+    // NEXT load recover even if this page never reaches its cleanup code.
+    localStorage.setItem(SESSION_RESTORE_MARKER,'restoring');
+    const saved=JSON.parse(raw);if(saved.schema!==SESSION_SCHEMA)return;
+    sessionExpectedModel=saved.modelId;
+    $('sessionStatus').textContent='Restoring saved session…';
+    applySavedControls(saved.controls);setUIMode(saved.controls?.uiMode);
+    state.extraFeet=(saved.skirt?.extraFeet||[]).map(foot=>({...foot}));
+    if(saved.skirt)state.skirtSettings={...saved.skirt,x:0};
+    renderExtraFeet();updateSkirtPlacementUI();updateExtraFootGuides();updateSymmetryUI();
+    if(saved.modelId){
+      if(!state.ready)throw new Error('CAD tools are not ready; the saved model will be retried on the next reload.');
+      const model=await sessionTransaction('readonly',store=>store.get('model'));
+      if(!model||model.id!==saved.modelId)throw new Error('Saved model is unavailable. Please select the model again.');
+      await loadMouse(new File([model.file],model.metadata.name,{type:model.metadata.type,lastModified:model.metadata.lastModified}));
+      if(!state.mouse)throw new Error('Saved mouse could not be restored.');
+      state.sessionModelId=model.id;state.mouseRevision=saved.mouseRevision;
+      applySavedControls(saved.controls);
+      state.selectedShellIndex=$('sourceShell').value||'auto';updateSourceShellUI();
+      const selected=state.selectedShellIndex==='auto'?state.autoShellIndex:Number(state.selectedShellIndex);
+      state.mouse.geometry.dispose();state.mouse.geometry=state.sourceShells[selected].geometry.clone();
+      const a=saved.alignment;
+      if(a){state.mouse.position.fromArray(a.position);state.mouse.quaternion.fromArray(a.quaternion);state.mouse.scale.fromArray(a.scale);state.mouse.userData.unit=a.unit;state.alignmentBasis=a.basis}
+      syncTransformFields();setAlignmentLocked(!!saved.locked);
+      const record=await sessionTransaction('readonly',store=>store.get('preprocessing'));
+      if(record?.schema===PREPROCESS_SCHEMA&&record.modelId===model.id){
+        if(record.humpCache?.key===humpCacheKey())state.humpCache=record.humpCache;
+        if(record.key===cacheKey()){
+          const meshes=record.meshes,sideProjection={grid:record.grid};
+          for(const key of ['plus','minus','mirrorPlusFromMinus','mirrorMinusFromPlus'])sideProjection[key]=restoreSolid(meshes[key]);
+          state.localCache={key:record.key,mouse:restoreSolid(meshes.mouse),wall:restoreSolid(meshes.wall),wallVolume:record.wallVolume,sideProjection,meshes};
+          state.preprocessReady=true;finishModelProgress('Saved preprocessed model restored. Refresh Preview to build the modules; no preprocessing is needed.');
+          log('Restored saved exterior projections and hump wall without preprocessing.','ok');
+        }
+      }
+    }
+    document.querySelector(`[data-mode="${['translate','rotate','scale'].includes(saved.mode)?saved.mode:'translate'}"]`)?.click();
+    if(saved.coreSaved||$('corePreviewMode').checked){
+      const savedCore=await sessionTransaction('readonly',store=>store.get('core'));
+      if(savedCore)await loadPathfinderCore(savedCore,{activate:false});
+      else if($('corePreviewMode').checked)await loadHostedPathfinderCore();
+    }
+    if(saved.camera){camera.position.fromArray(saved.camera.position);camera.up.fromArray(saved.camera.up);camera.near=saved.camera.near;camera.far=saved.camera.far;camera.updateProjectionMatrix();orbit.target.fromArray(saved.camera.target);orbit.update()}
+    updateSkirtPlacementUI();updateExtraFootGuides();refreshSceneVisibility();updatePreprocessButton();
+    $('sessionStatus').textContent=state.preprocessReady?'Saved session and preprocessed model restored.':'Saved settings restored.';
+  }catch(error){
+    state.preprocessReady=false;log(`Session restore: ${error.message}`,'warning');
+    $('sessionStatus').textContent='Session could not be fully restored. '+error.message;
+    updatePreprocessButton();
+  }finally{
+    if(!sessionResetting){
+      // Include the first rendered frames in the guarded startup.
+      await yieldFrame();await yieldFrame();
+      if(!sessionResetting){
+        try{localStorage.removeItem(SESSION_RESTORE_MARKER)}catch{}
+        sessionRestoring=false;state.sessionReady=true;lockSessionControls(false);saveSessionSettings();
+      }
+    }
+  }
+}
+async function resetAll(){
+  if(sessionResetting)return;
+  sessionResetting=true;clearTimeout(sessionSaveTimer);clearTimeout(state.livePreviewTimer);
+  state.preprocessToken++;state.offsetJob?.cancel();state.gripJob?.cancel();
+  lockSessionControls(true);$('resetAll').disabled=true;$('sessionStatus').textContent='Clearing saved settings and model…';
+  let reloadTimer;
+  try{
+    localStorage.setItem(SESSION_RESTORE_MARKER,'reset');
+    localStorage.removeItem(SESSION_SETTINGS_KEY);localStorage.removeItem('pathfinder-ui-mode');
+    // Reset must not wait forever for a blocked database or an earlier write.
+    reloadTimer=setTimeout(()=>location.reload(),2000);
+    await sessionWrites.catch(()=>{});
+    await sessionTransaction('readwrite',store=>store.clear());
+    clearTimeout(reloadTimer);location.reload();
+  }catch(error){
+    if(reloadTimer){clearTimeout(reloadTimer);location.reload()}
+    else{sessionResetting=false;lockSessionControls(false);$('resetAll').disabled=false;sessionStorageError(error)}
+  }
+}
+$('resetAll').onclick=resetAll;
+for(const event of ['input','change','click'])document.addEventListener(event,()=>saveSessionSettings());
+orbit.addEventListener('end',scheduleSessionSettings);
+window.addEventListener('pagehide',saveSessionSettings);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')saveSessionSettings()});
+lockSessionControls(true);
+
+await initLibrariesAndTemplate();
+await restoreSession();
 </script>
 </body>
 </html>
