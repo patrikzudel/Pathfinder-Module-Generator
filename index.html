@@ -92,6 +92,9 @@
     .modeSwitch{display:flex;align-items:center;gap:8px;font-size:12px;flex-shrink:0}.modeSwitch select{width:auto}
     .gripWarnings{color:var(--bad);font-size:12px;margin:11px 0;line-height:1.6}.gripWarnings p{margin:9px 0}
     body[data-ui-mode="simple"] .advancedOnly{display:none!important}
+    #copyDebugSettings{width:100%;margin-top:12px;background:transparent;opacity:.5}
+    #copyDebugSettings:hover,#copyDebugSettings:focus-visible{opacity:1}
+    body[data-ui-mode="advanced"] .simpleOnly{display:none!important}
     body[data-ui-mode="simple"] #buildSection>.previewNote,
     body[data-ui-mode="simple"] #buildSection>.pipeline,
     body[data-ui-mode="simple"] #buildSection>p.hint,
@@ -213,9 +216,13 @@
           <p class="hint">Default −0.60 mm assumes the supplied V2 foot underside at Z=0.20 mm with 0.80 mm skates. Match this plane to the bottom of your installed Pathfinder skates; it is a reference setting, not a measurement of your core.</p>
         </details>
         <button id="resetSkirt">Reset foot Y</button>
-        <p id="skirtHeight" class="hint"></p>
-        <p class="hint">Enter your skate dots’ dimensions. The foot stays at skate height; two vertical pillars connect directly to the underside of the Pathfinder rear rails. The foot stays centered on X. Move Y to place the pillars beneath the rails and the dots under the rear overhang. Gold = foot and pillars; green = rail connection; charcoal = purchased dots; blue = pad plane; red = printed plastic conflicting with the pad clearance or dots. Guides and dots are not exported.</p>
-        <p id="skirtContact" class="hint" role="status">Refresh the exact preview to build the rear skate support.</p>
+        <h3>Extra circular feet</h3><div id="extraFeet"></div>
+        <button id="addExtraFoot" type="button">Add circular foot</button>
+        <p class="hint advancedOnly">Place extra feet with world X/Y coordinates in millimeters (positive Y is rearward). They use the dot dimensions above and the same automatic skate height. Each seat has a 1 mm rim, a straight arm to the rear foot, and a square vertical pillar up to the hump. Place the entire pillar beneath the hump. Gold outlines update immediately; click Refresh Preview to build and validate the supports. Check core clearance in assembly preview before printing.</p>
+        <p id="skirtHeight" class="hint advancedOnly"></p>
+        <p class="hint advancedOnly">Enter your skate dots’ dimensions. The foot stays at skate height; two vertical pillars connect directly to the underside of the Pathfinder rear rails. The foot stays centered on X. Move Y to place the pillars beneath the rails and the dots under the rear overhang. Gold = foot and pillars; green = rail connection; charcoal = purchased dots; blue = pad plane; red = printed plastic conflicting with the pad clearance or dots. Guides and dots are not exported.</p>
+        <p id="skirtContact" class="hint advancedOnly" role="status">Refresh the exact preview to build the rear skate support.</p>
+        <div id="skirtFitCard" class="fitGrid" role="status"></div>
       </div>
 <div class="gripSettings"><h2>Side grip tape recesses</h2><p class="hint">Full side outline with an inset measured in side view. The recess follows the curved exterior. The inset grows locally with smooth transitions where needed to preserve the chosen minimum backing and protect Pathfinder attachments. A notice explains adjustments; dashed charcoal shows the requested outline and gold shows the final cut. Gold lines mark the recess perimeter. Refresh the exact preview after edits.</p><fieldset><legend>Left side</legend><label class="check" title="Cut a curved recess into the left side for grip tape and enable its printable cutting template."><input id="leftGripEnabled" type="checkbox"> Enable grip recess</label><div class="field"><label for="leftGripMargin">Outline inset · mm</label><input id="leftGripMargin" type="number" min="1" step="0.1" value="1"></div><div class="grid2 gripThicknessRow"><div class="field"><label for="leftGripDepth">Tape thickness · mm</label><input id="leftGripDepth" type="number" min="0.2" max="5" step="0.05" value="0.4"></div><div class="field"><label for="leftGripBacking">Minimum remaining backing · mm</label><input id="leftGripBacking" type="number" min="0.2" max="2" step="0.1" value="0.8"></div></div></fieldset><fieldset><legend>Right side</legend><label class="check" title="Cut a curved recess into the right side for grip tape and enable its printable cutting template."><input id="rightGripEnabled" type="checkbox"> Enable grip recess</label><div class="field"><label for="rightGripMargin">Outline inset · mm</label><input id="rightGripMargin" type="number" min="1" step="0.1" value="1"></div><div class="grid2 gripThicknessRow"><div class="field"><label for="rightGripDepth">Tape thickness · mm</label><input id="rightGripDepth" type="number" min="0.2" max="5" step="0.05" value="0.4"></div><div class="field"><label for="rightGripBacking">Minimum remaining backing · mm</label><input id="rightGripBacking" type="number" min="0.2" max="2" step="0.1" value="0.8"></div></div></fieldset><div id="gripWarnings" class="gripWarnings" role="status" hidden></div><p id="gripStatus" class="hint" role="status">No grip recesses enabled.</p><button id="cancelGrip" disabled>Cancel grip calculation</button></div>
       <label class="check" title="Reduce mouse surface detail within 0.03 mm to speed up preview cuts."><input id="simplify" type="checkbox"> Simplify mouse surfaces before preview cuts (0.03 mm)</label>
@@ -231,6 +238,8 @@
       <button id="downloadAll" style="width:100%" disabled>Download all STL files</button>
       <button id="gripPDF" style="width:100%;margin-top:8px" disabled>Download A4 grip templates (PDF)</button>
       <p class="hint">Templates flatten the curved contact surface and report estimated distortion. Print at 100% and check the calibration bar.</p>
+      <button id="copyDebugSettings" type="button">Copy debug settings info</button>
+      <p id="debugCopyStatus" class="hint" role="status"></p>
     </div>
   </aside>
 
@@ -545,6 +554,7 @@ function refreshSceneVisibility(){
   if(state.toolGroups.hump)state.toolGroups.hump.visible=$('showHump').checked;
   ['left','right','rear','skirt'].forEach(k=>state.toolGroups[k]&&(state.toolGroups[k].visible=$('showAttach').checked&&!state.previewData?.modules&&(k!=='rear'||!state.previewData)&&(k!=='skirt'||($('addSkirt').checked&&state.tools.skirt&&!state.previewData))));
   const generated=hasGeneratedOutputs(),showGenerated=generated&&(coreMode||$('showOutputs').checked);
+  if(state.extraFootGuides)state.extraFootGuides.visible=$('addSkirt').checked;
   state.previewGroup.visible=!showGenerated&&(coreMode||$('showFitPreview').checked);
   state.outputGroup.visible=showGenerated;
   corePreviewGroup.visible=coreMode;
@@ -691,7 +701,7 @@ async function loadMouse(file){
     state.sourceShells.forEach(shell=>shell.geometry.dispose());state.sourceShells=analysis.shells;state.autoShellIndex=analysis.auto;state.selectedShellIndex='auto';
     if(state.mouse){transform.detach();scene.remove(state.mouse);state.mouse.geometry.dispose();state.mouse.material.dispose()}
     const mat=sourceMouseMaterial();
-    const initialSurface=analysis.shells[analysis.auto].geometry.clone();const mesh=new THREE.Mesh(initialSurface,mat);mesh.name=file.name;const unit=+$('units').value;mesh.scale.setScalar(unit);mesh.userData.unit=unit;scene.add(mesh);state.mouse=mesh;centerAndGroundMouse();state.mouseRevision++;invalidatePreview(true);setAlignmentLocked(false);syncTransformFields();updateSourceShellUI();
+    const initialSurface=analysis.shells[analysis.auto].geometry.clone();const mesh=new THREE.Mesh(initialSurface,mat);mesh.name=file.name;state.modelFile={name:file.name,size:file.size,type:file.type,lastModified:file.lastModified};const unit=+$('units').value;mesh.scale.setScalar(unit);mesh.userData.unit=unit;scene.add(mesh);state.mouse=mesh;centerAndGroundMouse();state.mouseRevision++;invalidatePreview(true);setAlignmentLocked(false);syncTransformFields();updateSourceShellUI();
     const b=new THREE.Box3().setFromObject(mesh),s=b.getSize(new THREE.Vector3());$('mouseInfo').textContent=`${file.name} · ${formatNum(g.getAttribute('position').count/3,0)} source triangles · ${formatNum(s.x)} × ${formatNum(s.y)} × ${formatNum(s.z)} mm · ${analysis.shells.length} connected surface${analysis.shells.length===1?'':'s'}`;
     const auto=analysis.shells[analysis.auto];if(analysis.shells.length>1)log(`Detected ${analysis.shells.length} connected source surfaces. Auto selected Shell ${analysis.auto+1}: it encloses ${auto.contains} other shell${auto.contains===1?'':'s'} and has the largest outer volume (${formatNum(auto.volume*Math.pow(unit,3),1)} mm³). Inner/secondary surfaces are discarded before shell generation.`,'warning');
     $('generate').disabled=true;$('previewFit').disabled=true;invalidatePreview(true);refreshSceneVisibility();if(corePreviewActive())fitCoreAssembly();else fitObject(mesh);log('Mouse loaded, centered on X/Y and placed on Z=0. Adjust its alignment, then click Preprocess mouse.','ok');
@@ -899,7 +909,7 @@ function disposeManifold(m){if(state.kernelTrapped)return;try{m?.delete?.()}catc
 function previewSignature(){if(!state.mouse)return '';const q=state.mouse.quaternion,p=state.mouse.position;return `${cacheKey()}|${p.x},${p.y},${p.z}|${q.x},${q.y},${q.z},${q.w}|fdm:${$('optimizeFDM').checked}|side:${$('sideMode')?.value||'auto'}|sym:${$('symmetryMode')?.checked?'1':'0'}:${$('symmetryPrimary')?.value||'right'}|${$('addSkirt').checked?'skirt:'+JSON.stringify(skirtSettings()):'plain'}|grip:${JSON.stringify(['left','right'].map(gripSettings))}|simplify:${$('simplify').checked}`}
 function invalidatePreview(rebuildModel=false){
   state.gripJob?.cancel();showGripWarnings([]);$('gripStatus').classList.remove('templateMetrics');$('gripPDF').disabled=true;setPreviewProgress(0,'Refresh the exact preview to apply changes.');
-  clearTimeout(state.skirtRefreshTimer);state.skirtRefreshPending=false;
+  clearTimeout(state.skirtRefreshTimer);state.skirtRefreshPending=false;$('skirtFitCard').replaceChildren();
   if($('addSkirt').checked)$('skirtContact').textContent='Refresh the exact preview to build the rear skate support.';
   clearOutputs();
   state.previewData=null;state.previewFits=null;state.previewValid=false;$('generate').disabled=true;if(state.previewGroup)clearGeometryGroup(state.previewGroup);for(const k of ['left','right','rear','skirt'])setToolFitColor(k,'idle');
@@ -1314,7 +1324,7 @@ function cropSafety(leftChoice,rightChoice,hump,humpWall,mouse,sources){
 }
 const SKIRT_DEFAULTS={x:0,y:0,rib:2,diameter:6,thickness:.8,padZ:-.6,minClearance:.2};
 const SKIRT_FIELDS={y:'skirtY',rib:'skirtRib',diameter:'skateDiameter',thickness:'skateThickness',padZ:'skirtPadZ',minClearance:'skirtClearance'};
-function skirtSettings(){return {...(state.skirtSettings||SKIRT_DEFAULTS),x:0}}
+function skirtSettings(){return {...(state.skirtSettings||SKIRT_DEFAULTS),x:0,extraFeet:(state.extraFeet||[]).map(p=>({...p}))}}
 function skirtOffset(){const s=skirtSettings(),z=state.tools.skirt?bboxArray(state.tools.skirt).min[2]:.2;return [s.x,s.y,s.padZ+s.thickness-z]}
 function updateSkirtPlacementUI(){
   const s=skirtSettings();$('skirtControls').style.display=$('addSkirt').checked?'block':'none';
@@ -1322,18 +1332,56 @@ function updateSkirtPlacementUI(){
   $('skirtHeight').textContent=`Foot underside Z=${formatNum(s.padZ+s.thickness,2)} mm · dot bottoms / pad Z=${formatNum(s.padZ,2)} mm. Height is calculated, not freely movable.`;
 }
 function skirtSettingsChanged(){
-  const refresh=!!state.previewData||state.skirtRefreshPending||(state.busy&&state.preprocessReady),settings=Object.fromEntries(Object.entries(SKIRT_FIELDS).map(([key,id])=>[key,Number($(id).value)]));
+  const settings=Object.fromEntries(Object.entries(SKIRT_FIELDS).map(([key,id])=>[key,Number($(id).value)]));
   const valid=Object.values(settings).every(Number.isFinite)&&settings.rib>=1&&settings.rib<=3&&settings.diameter>=1&&settings.diameter<=12&&settings.thickness>=.1&&settings.thickness<=3&&settings.minClearance>=.05&&settings.minClearance<=3&&Object.values(SKIRT_FIELDS).every(id=>$(id).value!=='');
   if(!valid){for(const [key,id] of Object.entries(SKIRT_FIELDS))$(id).value=skirtSettings()[key];updateSkirtPlacementUI();log('Enter valid foot offsets, 1–3 mm pillars, 1–12 mm dots and 0.1–3 mm skate thickness and 0.05–3 mm clearance.','warning');return}
   state.skirtSettings={...settings,x:0};updateSkirtPlacementUI();invalidatePreview(false);
-  if(refresh&&state.preprocessReady){
-    state.skirtRefreshPending=true;
-    const run=()=>{if(!state.skirtRefreshPending)return;if(state.busy){state.skirtRefreshTimer=setTimeout(run,150);return}buildFitPreview(false)};
-    state.skirtRefreshTimer=setTimeout(run,300);
-  }
+  clearTimeout(state.livePreviewTimer);updateExtraFootGuides();
 }
 for(const id of Object.values(SKIRT_FIELDS))$(id).addEventListener('change',skirtSettingsChanged);
 $('resetSkirt').onclick=()=>{$('skirtY').value=0;skirtSettingsChanged()};
+function updateExtraFootGuides(){
+  if(!state.extraFootGuides){state.extraFootGuides=new THREE.Group();state.extraFootGuides.name='Circular foot placement outlines';scene.add(state.extraFootGuides)}
+  const group=state.extraFootGuides;clearGeometryGroup(group);
+  group.visible=$('addSkirt').checked;
+  if(!group.visible)return;
+  const settings=skirtSettings(),z=settings.padZ+settings.thickness;
+  const circle=(x,y,r,height)=>{
+    const points=Array.from({length:64},(_,i)=>new THREE.Vector3(x+r*Math.cos(i*Math.PI/32),y+r*Math.sin(i*Math.PI/32),height));
+    const line=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xffb020,depthTest:false,depthWrite:false,transparent:true,opacity:.9}));
+    line.renderOrder=25;group.add(line);
+  };
+  for(const {x,y,detectionHeight=0} of settings.extraFeet){
+    circle(x,y,settings.diameter/2+1,z);
+    const height=z+1.2+detectionHeight,r=settings.rib/2;
+    const points=[[-r,-r],[r,-r],[r,r],[-r,r]].map(([dx,dy])=>new THREE.Vector3(x+dx,y+dy,height));
+    const line=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xffb020,depthTest:false,depthWrite:false}));
+    line.name='Square pillar roof detection start';line.renderOrder=25;group.add(line);
+  }
+}
+function renderExtraFeet(){
+  const list=$('extraFeet');list.replaceChildren();
+  (state.extraFeet||[]).forEach((foot,index)=>{
+    const row=document.createElement('fieldset'),legend=document.createElement('legend');legend.textContent=`Circular foot ${index+1}`;row.append(legend);
+    const grid=document.createElement('div');grid.className='grid2';
+    for(const axis of ['x','y','detectionHeight']){
+      const field=document.createElement('div');field.className='field';
+      const label=document.createElement('label'),input=document.createElement('input');input.id=`extraFoot-${index}-${axis}`;label.htmlFor=input.id;label.textContent=axis==='detectionHeight'?'Roof detection above foot · mm':`${axis.toUpperCase()} position · mm`;
+      input.type='number';input.step='0.1';input.value=foot[axis]??0;
+      if(axis==='detectionHeight'){input.min='0';input.title='Ignore hump geometry below this height above the circular foot top. The pillar still starts at the foot. Raise this past scan artifacts, keeping it below the real roof.'}
+      input.oninput=()=>{const value=Number(input.value);if(input.value===''||!Number.isFinite(value)||(axis==='detectionHeight'&&value<0))return;foot[axis]=value;skirtSettingsChanged()};
+      input.onchange=()=>{if(input.value===''||!Number.isFinite(Number(input.value))||(axis==='detectionHeight'&&Number(input.value)<0))input.value=foot[axis]??0};
+      field.append(label,input);grid.append(field);
+    }
+    const remove=document.createElement('button');remove.type='button';remove.textContent='Remove foot';remove.onclick=()=>{state.extraFeet.splice(index,1);renderExtraFeet();skirtSettingsChanged()};
+    row.append(grid,remove);list.append(row);
+  });
+}
+$('addExtraFoot').onclick=()=>{
+  state.extraFeet??=[];const n=state.extraFeet.length;
+  state.extraFeet.push({x:(n%2===0?1:-1)*(22+Math.floor(n/2)*10),y:skirtSettings().y+60,detectionHeight:0});
+  renderExtraFeet();skirtSettingsChanged();
+};
 function skirtDotCenters(settings){
   // Two seats on the centerline of the original V2 annular foot, away from
   // its rounded ends. Their footprints are checked against the actual foot.
@@ -1352,7 +1400,27 @@ function rearRailMatingKeepout(){
   // must connect. The original STEP rail remains the authoritative profile.
   return state.Manifold.cube([25.6,50,6]).translate([-12.8,23.6,12]).subtract(state.tools.rearPlug);
 }
-function buildSkateFoot(hump,rail,sourceFoot=state.tools.skirt,settings=skirtSettings()){
+function extraFootPillar(hump,x,y,bottom,width,detectionStart=bottom,outerMouse=hump){
+  // A fixed square column detects the first closed wall above the chosen height.
+  // The base remains solid below that height, bypassing lower scan artifacts.
+  // Reject uncovered footprints instead of allowing a column through the palm surface.
+  const M=state.Manifold,top=bboxArray(hump).max[2]+1;
+  if(top<=bottom)throw new Error('the hump is below the foot');
+  if(!Number.isFinite(detectionStart)||detectionStart<bottom||detectionStart>=top)throw new Error('roof detection must start below the hump roof and above the foot');
+  const column=M.cube([width,width,top-bottom]).translate([x-width/2,y-width/2,bottom]);
+  const detectedHump=hump.trimByPlane([0,0,1],detectionStart);
+  const parts=column.subtract(detectedHump).decompose().filter(p=>!p.isEmpty()&&p.volume()>1e-6);
+  const lower=parts.find(p=>Math.abs(bboxArray(p).min[2]-bottom)<1e-5);
+  if(!lower||bboxArray(lower).max[2]>=top-1e-5)throw new Error('place the entire square pillar under the hump and start detection below its roof');
+  // Extend the whole roof-facing end inside the closed outer envelope.
+  // Clipping only to the thin, noisy wall creates coincident sliver boundaries.
+  const extension=lower.translate([0,0,.3]).intersect(outerMouse).intersect(column);
+  const pillar=lower.add(extension),contact=pillar.intersect(detectedHump);
+  if(contact.isEmpty()||contact.volume()<.01)throw new Error('the pillar has insufficient contact with the hump');
+  if(pillar.status()!=='NoError'||componentCount(pillar)!==1)throw new Error('the pillar could not form a closed support; raise Roof detection above foot past scan artifacts or move the foot');
+  return {pillar,contact};
+}
+function buildSkateFoot(hump,rail,sourceFoot=state.tools.skirt,settings=skirtSettings(),outerMouse=hump){
   settings={...settings,x:0};
   const M=state.Manifold,keepout=rearRailMatingKeepout(),sourceBounds=bboxArray(sourceFoot),offset=[settings.x,settings.y,settings.padZ+settings.thickness-sourceBounds.min[2]],foot=sourceFoot.translate(offset),fb=bboxArray(foot),hb=bboxArray(hump);
   const result={settings:{...settings},foot,supports:[],anchors:[],dots:[],contact:null,intrusions:[],issues:[],skirt:foot,valid:false};
@@ -1371,6 +1439,31 @@ function buildSkateFoot(hump,rail,sourceFoot=state.tools.skirt,settings=skirtSet
     result.anchors.push(root);
     result.supports.push(rib);result.skirt=result.skirt.add(rib);
   }
+  result.extraFeet=[];result.extraPillars=[];result.humpContacts=[];
+  for(const [index,{x,y,detectionHeight=0}] of (settings.extraFeet||[]).entries()){
+    if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(detectionHeight)||detectionHeight<0){result.issues.push(`Circular foot ${index+1} has an invalid position.`);continue}
+    const radius=settings.diameter/2,z=fb.min[2],height=fb.max[2]-z;
+    const anchors=skirtDotCenters(settings).map(seat=>seat.xy).sort((a,b)=>Math.hypot(x-a[0],y-a[1])-Math.hypot(x-b[0],y-b[1]));
+    const [ax,ay]=anchors[0],dx=x-ax,dy=y-ay,length=Math.hypot(dx,dy);
+    const seat=M.cylinder(height,radius+1,radius+1,64).translate([x,y,z]);
+    const arm=length>1e-6?M.cube([length,settings.rib,height]).translate([0,-settings.rib/2,0]).rotate([0,0,Math.atan2(dy,dx)*180/Math.PI]).translate([ax,ay,z]):seat;
+    let extra=seat.add(arm);
+    try{
+      const {pillar,contact}=extraFootPillar(hump,x,y,fb.max[2]-.3,settings.rib,fb.max[2]+detectionHeight,outerMouse);
+      if(pillar.intersect(keepout).volume()>1e-4)throw new Error('the pillar obstructs the Pathfinder rail clearance');
+      extra=extra.add(pillar);result.extraPillars.push(pillar);result.humpContacts.push(contact);
+    }catch(error){result.issues.push(`Circular foot ${index+1}: ${error.message}.`)}
+    const dot=M.cylinder(settings.thickness,radius,radius,64).translate([x,y,settings.padZ]);
+    result.dots.push(dot);result.extraFeet.push(extra);
+    if(extra.status()!=='NoError'||componentCount(extra)!==1||extra.intersect(foot).volume()<.01)result.issues.push(`Circular foot ${index+1} could not connect to the rear foot. Adjust its X/Y position.`);
+    if(extra.intersect(keepout).volume()>1e-4)result.issues.push(`Circular foot ${index+1} obstructs the Pathfinder rail clearance.`);
+    const seatTest=M.cylinder(.1,radius,radius,64).translate([x,y,z+.01]);
+    if(seatTest.intersect(extra).volume()<seatTest.volume()*.999)result.issues.push(`Circular foot ${index+1} does not fully support its dot.`);
+    result.skirt=result.skirt.add(extra);
+  }
+  for(let i=0;i<result.dots.length;i++)for(let j=i+1;j<result.dots.length;j++){
+    if(result.dots[i].intersect(result.dots[j]).volume()>1e-5)result.issues.push(`Skate dots ${i+1} and ${j+1} overlap. Move the extra circular feet apart.`);
+  }
   result.contact=rail?result.skirt.intersect(rail):M.cube([0,0,0]);result.overlap=Math.max(0,Number(result.contact.volume())||0);
   const printed=[hump,rail,result.skirt].filter(part=>part&&!part.isEmpty());
   result.clearance=Math.min(...printed.map(part=>bboxArray(part).min[2]))-settings.padZ;
@@ -1386,22 +1479,23 @@ function buildSkateFoot(hump,rail,sourceFoot=state.tools.skirt,settings=skirtSet
     }
   }
   result.rearOverhang=Math.max(0,hb.max[1]-Math.max(...result.dots.map(dot=>bboxArray(dot).max[1])));
-  if(!result.issues.length&&(result.supports.length!==2||componentCount(result.skirt)!==1||result.overlap<.01))result.issues.push('The rear foot needs two connected supports into the rear rail.');
+  if(!result.issues.length&&(result.supports.length!==2||result.skirt.status()!=='NoError'||componentCount(result.skirt)!==1||result.overlap<.01))result.issues.push('The rear foot needs two connected supports into the rear rail.');
   result.valid=result.issues.length===0;
   return result;
 }
 function skateFootFitCard(build){
-  const text=build.valid?`Two vertical pillars connected beneath the Pathfinder rear rails · ${formatNum(build.clearance,2)} mm minimum printed clearance above the pad · rear edge ${formatNum(build.rearOverhang,1)} mm beyond the dots.`:build.issues.join(' '),status=build.valid?'good':'bad';
+  const text=build.valid?`Two vertical pillars connected beneath the Pathfinder rear rails · ${build.extraFeet.length} extra circular feet with hump pillars · ${formatNum(build.clearance,2)} mm minimum printed clearance above the pad · rear edge ${formatNum(build.rearOverhang,1)} mm beyond the dots.`:build.issues.join(' '),status=build.valid?'good':'bad';
   setToolFitColor('skirt',status);$('skirtContact').textContent=text;
-  return {ready:build.valid,fit:{overlap:build.overlap,gap:0},status,html:`<div class="fitCard ${status}"><i class="lamp"></i><div><strong>Rear skate support</strong><span>${text}</span></div></div>`};
+  return {ready:build.valid,fit:{overlap:build.overlap,gap:0},status,html:`<div class="fitCard ${status}"><i class="lamp"></i><div><strong>Rear skate support</strong><span class="advancedOnly">${text}</span>${build.valid?'':'<span class="simpleOnly">Adjust foot position or roof detection height, then refresh. Details in Advanced mode.</span>'}</div></div>`};
 }
 function showSkirtContact(hump,skirt,fit,build){
   const guide=new THREE.Group();guide.name='Rear skate support guide';guide.userData.skirtContactGuide=true;
   const outline=(solid,color)=>{const geometry=manifoldToGeometry(solid),edges=new THREE.EdgesGeometry(geometry,25);geometry.dispose();const lines=new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color,transparent:true,opacity:.9,depthTest:false,depthWrite:false}));lines.renderOrder=20;guide.add(lines)};
   const overlay=(solid,color,name)=>{if(!solid||solid.isEmpty())return;const mesh=new THREE.Mesh(manifoldToGeometry(solid),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.65,side:THREE.DoubleSide,depthTest:false,depthWrite:false}));mesh.name=name;mesh.renderOrder=21;guide.add(mesh)};
-  outline(build.foot,0xffb020);build.supports.forEach(rib=>outline(rib,0xffb020));build.dots.forEach(dot=>outline(dot,0x4e493e));
+  outline(build.foot,0xffb020);(build.extraFeet||[]).forEach(foot=>outline(foot,0xffb020));build.supports.forEach(rib=>outline(rib,0xffb020));build.dots.forEach(dot=>outline(dot,0x4e493e));
+  (build.humpContacts||[]).forEach(contact=>overlay(contact,0x13c96b,'Circular foot–hump overlap'));
   overlay(build.contact,0x13c96b,'Skirt–rail overlap');build.intrusions.forEach(part=>overlay(part,0xf23e52,'Printed clearance conflict'));
-  const hb=bboxArray(hump),fb=bboxArray(build.foot),min=[0,1].map(i=>Math.min(hb.min[i],fb.min[i])-10),max=[0,1].map(i=>Math.max(hb.max[i],fb.max[i])+10);
+  const hb=bboxArray(hump),fb=bboxArray(build.skirt),min=[0,1].map(i=>Math.min(hb.min[i],fb.min[i])-10),max=[0,1].map(i=>Math.max(hb.max[i],fb.max[i])+10);
   const plane=new THREE.Mesh(new THREE.PlaneGeometry(max[0]-min[0],max[1]-min[1]),new THREE.MeshBasicMaterial({color:0x168bff,transparent:true,opacity:.12,side:THREE.DoubleSide,depthWrite:false}));
   plane.name='Calibrated pad contact plane';plane.position.set((min[0]+max[0])/2,(min[1]+max[1])/2,build.settings.padZ);guide.add(plane);
   state.previewGroup.add(guide);
@@ -1679,7 +1773,7 @@ $('gripPDF').onclick=()=>{if(state.previewValid&&state.previewData?.signature===
 $('cancelGrip').onclick=()=>state.gripJob?.cancel();
 for(const side of ['left','right'])for(const key of ['Enabled','Margin','Depth','Backing'])$(side+'Grip'+key).addEventListener('change',()=>{invalidatePreview(false);$('gripStatus').textContent='Grip settings changed. Refresh Preview.'});
 async function buildFitPreview(fitView=true){
-  clearTimeout(state.skirtRefreshTimer);state.skirtRefreshPending=false;
+  clearTimeout(state.skirtRefreshTimer);state.skirtRefreshPending=false;$('skirtFitCard').replaceChildren();
   state.previewStats??={completeCacheHits:0,sideCacheHits:0,humpCacheHits:0,builds:0};
   if(!state.busy&&!state.positioning&&state.preprocessReady&&state.previewData?.signature===previewSignature()&&state.previewData.finished){
     state.previewStats.completeCacheHits++;if(fitView)(corePreviewActive()?fitCoreAssembly():fitObject(state.previewGroup));
@@ -1698,7 +1792,7 @@ async function buildFitPreview(fitView=true){
     const sourceRail=state.tools.rearPlug,{railTrim,rail,chosen,hump}=cachedHump(prepared);
     const skirtEnabled=$('addSkirt').checked&&!!state.tools.skirt;
     if(skirtEnabled){setProgress(70);log('Building the low rear foot, two vertical pillars and skate clearance guides…');await yieldFrame();if(signature!==previewSignature()||!state.preprocessReady)return}
-    const skirtBuild=skirtEnabled?buildSkateFoot(hump,rail):null,skirt=skirtBuild?.skirt||null;
+    const skirtBuild=skirtEnabled?buildSkateFoot(hump,rail,state.tools.skirt,skirtSettings(),prepared.mouse):null,skirt=skirtBuild?.skirt||null;
     previewGeometry(left,0x16c784);previewGeometry(right,0x168bff);previewGeometry(hump,0xae45f5);previewGeometry(rail,0xff7926);if(skirt)previewGeometry(skirt,0xffb020);
     // Hide the untrimmed STEP rail while exact preview is active: it contains construction excess by design.
     if(state.toolGroups.rear)state.toolGroups.rear.visible=false;
@@ -1723,6 +1817,9 @@ async function buildFitPreview(fitView=true){
       for(const [index,side] of ['left','right'].entries()){state.gripSideIndex=index;state.gripSideName=side;const result=await applyGrip(modules[side],side==='left'?left:right,sideCells.sources[side],side,signature,sideCells.sources[side+'Sign']);if(signature!==previewSignature())return;modules[side]=result.module;if(result.template)grips.push(result.template);showGripWarnings(grips)}
       state.previewData.grips=grips;$('gripPDF').disabled=!grips.length||grips.some(t=>t.templateError);
       $('gripStatus').classList.toggle('templateMetrics',grips.length>0);$('gripStatus').textContent=grips.length?grips.map(t=>t.templateError?`${t.side}: A4 template unavailable.`:`${t.side}: Flattened template RMS ${t.rms.toFixed(2)}%, maximum ${t.max.toFixed(2)}% edge strain.${t.max>5?' High distortion: reduce the footprint or test the paper fit.':''}`).join(' '):'No grip recesses enabled.';
+      setPreviewProgress(96,'Validating the printable hump at STL precision…');await yieldFrame();
+      if(signature!==previewSignature())return;
+      modules.hump=finalizePrintableHump(modules.hump,rail,skirt);
       state.previewData.modules=modules;clearGeometryGroup(state.previewGroup);
       previewGeometry(modules.left,0x16c784).userData.gripSide='left';previewGeometry(modules.right,0x168bff).userData.gripSide='right';previewGeometry(modules.hump,0xae45f5);
       for(const t of grips)for(const loop of t.requestedGuideLoops||[]){const line=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(loop.map(p=>new THREE.Vector3(...p))),new THREE.LineDashedMaterial({color:0x4e493e,dashSize:1,gapSize:.7,transparent:true,opacity:.65}));line.computeLineDistances();line.userData.gripRequestedOutline=true;state.previewGroup.add(line)}
@@ -1730,8 +1827,8 @@ async function buildFitPreview(fitView=true){
     }
     if(skirt)showSkirtContact(hump,skirt,sf.fit,skirtBuild);
     const cropClass=safe.ok?'good':'bad',cropText=safe.ok?`Projected side cells look plausible. Left: ${formatNum(safe.lm.volume,0)} mm³ from ${sideCells.sources.leftSource}. Right: ${formatNum(safe.rm.volume,0)} mm³ from ${sideCells.sources.rightSource}. Hump retains ${formatNum(safe.hm.fraction*100,0)}% of its reusable wall.`:`Blocked: ${safe.problems.join('; ')}.`;
-    const skirtCard=sf?sf.html:`<div class="fitCard"><i class="lamp"></i><div><strong>Optional hump skirt</strong><span>Off. Enable “Add rear skate foot” to construct the rear support for purchased skate dots.</span></div></div>`;
-    $('fitCards').innerHTML=lf.html+rf.html+hf.html+skirtCard+`<div class="fitCard ${cropClass}"><i class="lamp"></i><div><strong>Module-region check</strong><span>${cropText}</span></div></div>`+`<div class="fitCard good"><i class="lamp"></i><div><strong>Rear-rail cleanup</strong><span>Removed ${formatNum(railTrim.removedVolume,1)} mm³ (${formatNum((1-railTrim.keptFraction)*100,1)}%) of the supplied rail beyond the uploaded palm surface. The orange exact-preview rail is the retained portion only.</span></div></div>`+`<div class="fitCard good"><i class="lamp"></i><div><strong>Construction method</strong><span>Side = first-hit exterior ±X projection → watertight envelope → target-side cutter → Boundary Fill cell${sideCells.sources.symmetric?` · symmetry primary ${sideCells.sources.primary}`:''}. Hump = ${chosen.method}. Rear rail = supplied STEP rail ∩ uploaded outer mouse.${skirt?' Rear skate support = intact V2 foot at calibrated skate height + two vertical pillars beneath the Pathfinder rear rails. Purchased dots and the pad plane are preview guides only.':''}</span></div></div>`;
+    $('skirtFitCard').innerHTML=sf?sf.html:'';
+    $('fitCards').innerHTML=lf.html+rf.html+hf.html+`<div class="fitCard ${cropClass}"><i class="lamp"></i><div><strong>Module-region check</strong><span>${cropText}</span></div></div>`+`<div class="fitCard good"><i class="lamp"></i><div><strong>Rear-rail cleanup</strong><span>Removed ${formatNum(railTrim.removedVolume,1)} mm³ (${formatNum((1-railTrim.keptFraction)*100,1)}%) of the supplied rail beyond the uploaded palm surface. The orange exact-preview rail is the retained portion only.</span></div></div>`+`<div class="fitCard good"><i class="lamp"></i><div><strong>Construction method</strong><span>Side = first-hit exterior ±X projection → watertight envelope → target-side cutter → Boundary Fill cell${sideCells.sources.symmetric?` · symmetry primary ${sideCells.sources.primary}`:''}. Hump = ${chosen.method}. Rear rail = supplied STEP rail ∩ uploaded outer mouse.${skirt?' Rear skate support = intact V2 foot at calibrated skate height + two vertical pillars beneath the Pathfinder rear rails. Purchased dots and the pad plane are preview guides only.':''}</span></div></div>`;
     state.previewData.finished=true;state.previewStats.lastMs=performance.now()-previewStart;
     log(`Exact preview built in ${formatNum(state.previewStats.lastMs/1000,2)} s.`, 'ok');
     $('generate').disabled=!state.previewValid;setProgress(100);setPreviewProgress(100,state.previewValid?'Exact preview complete.':'Preview complete; correct the fit checks before exporting.');
@@ -1757,10 +1854,37 @@ function stlArrayBuffer(data){
   if(ArrayBuffer.isView(data))return data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength);
   throw new Error('STL exporter returned an unsupported binary payload.');
 }
+function binarySTLForSolid(solid){
+  const geometry=manifoldToGeometry(solid),mesh=new THREE.Mesh(geometry);
+  try{return new STLExporter().parse(mesh,{binary:true})}finally{geometry.dispose();mesh.material.dispose()}
+}
+function finalizePrintableHump(source,rail,skirt){
+  // STL has float32 coordinates and no vertex topology. Resolve connectivity
+  // in that representation before displaying the completed printable module.
+  const parsed=new STLLoader().parse(stlArrayBuffer(binarySTLForSolid(source)));
+  let decoded;
+  try{decoded=threeGeometryToManifold(parsed)}finally{parsed.dispose()}
+  let result=decoded;
+  const count=componentCount(decoded);
+  if(count!==1){
+    const required=[rail,skirt].filter(Boolean),parts=physicalComponentInfo(decoded);
+    const candidates=parts.filter(({part})=>required.every(attachment=>attachmentRetention(part,attachment)>=.99999));
+    if(candidates.length!==1)throw new Error('STL precision separates a required hump attachment. Adjust the alignment or skate supports.');
+    result=candidates[0].part;
+    // These are disconnected mouse-surface cut remnants, never a foot, rail
+    // or pillar. Keep each cavity with its enclosing physical solid.
+    const removed=parts.filter(p=>p!==candidates[0]).reduce((sum,p)=>sum+p.volume,0);
+    validateSTLRoundTrip('Pathfinder_Hump',source,binarySTLForSolid(result));
+    log(`Hump construction: removed ${parts.length-1} disconnected scan remnants at STL precision (${formatNum(removed,4)} mm³); all rail and skate support material retained.`,'warning');
+  }else{
+    validateSTLRoundTrip('Pathfinder_Hump',source,binarySTLForSolid(result));
+  }
+  return result;
+}
 function validateSTLRoundTrip(name,sourceManifold,stlData){
   let roundTrip=null;
   try{
-    const parsed=new STLLoader().parse(stlArrayBuffer(stlData));roundTrip=threeGeometryToManifold(parsed);
+    const parsed=new STLLoader().parse(stlArrayBuffer(stlData));try{roundTrip=threeGeometryToManifold(parsed)}finally{parsed.dispose()}
     const parts=componentCount(roundTrip),sourceVolume=Math.abs(Number(sourceManifold.volume())||0),roundVolume=Math.abs(Number(roundTrip.volume())||0),delta=sourceVolume?Math.abs(roundVolume-sourceVolume)/sourceVolume:1;
     const sb=bboxArray(sourceManifold),rb=bboxArray(roundTrip),boundError=Math.max(...sb.min.map((v,i)=>Math.abs(v-rb.min[i])),...sb.max.map((v,i)=>Math.abs(v-rb.max[i])));
     if(parts!==1)throw new Error(`${name} STL re-import contains ${parts} disconnected solids.`);
@@ -1802,13 +1926,43 @@ async function generate(){
   finally{state.busy=false;releaseUnusedManifolds();updatePreprocessButton();setTimeout(()=>setProgress(0),900)}
 }
 $('generate').onclick=generate;
+function debugSettingsInfo(){
+  const controls={};
+  for(const input of document.querySelectorAll('input,select,textarea')){
+    if(!input.id)continue;
+    controls[input.id]=input.type==='file'?Array.from(input.files||[],file=>({name:file.name,size:file.size,type:file.type,lastModified:file.lastModified})):input.type==='checkbox'||input.type==='radio'?input.checked:input.value;
+  }
+  const m=state.mouse;
+  return {
+    schema:'pathfinder-debug-settings-v1',appVersion:window.__PATHFINDER_APP_VERSION__,capturedAt:new Date().toISOString(),
+    environment:{userAgent:navigator.userAgent,uiMode:document.body.dataset.uiMode},
+    model:state.modelFile||{name:m?.name||null},controls,
+    alignment:m?{positionMm:m.position.toArray(),rotationDegrees:[m.rotation.x,m.rotation.y,m.rotation.z].map(THREE.MathUtils.radToDeg),rotationOrder:m.rotation.order,quaternion:m.quaternion.toArray(),scale:m.scale.toArray(),locked:state.alignmentLocked,transformMode:transform.getMode(),importUnit:m.userData.unit}:null,
+    source:{selected:state.selectedShellIndex,autoShellIndex:state.autoShellIndex,shells:state.sourceShells.map(s=>({triangles:s.triangles,volume:s.volume,size:s.size}))},
+    skate:skirtSettings(),grips:['left','right'].map(gripSettings),
+    status:{ready:state.ready,busy:state.busy,preprocessReady:state.preprocessReady,previewValid:state.previewValid,previewCurrent:previewIsCurrent(),previewVisible:currentPreviewVisible(),currentSignature:m?previewSignature():null,completedSignature:state.previewData?.signature||null,skateIssues:state.previewData?.skirtBuild?.issues||[],outputs:Object.keys(state.outputs)},
+    camera:{position:camera.position.toArray(),target:orbit.target.toArray(),up:camera.up.toArray()},
+    log:$('log').textContent
+  };
+}
+$('copyDebugSettings').onclick=async()=>{
+  const text=JSON.stringify(debugSettingsInfo(),null,2);
+  try{
+    if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(text);
+    else{
+      const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.append(area);area.select();
+      try{if(!document.execCommand('copy'))throw new Error('Clipboard access unavailable')}finally{area.remove()}
+    }
+    $('debugCopyStatus').textContent='Debug settings copied.';
+  }catch(error){$('debugCopyStatus').textContent='Clipboard unavailable; downloaded debug settings instead.';downloadBlob(new Blob([text],{type:'application/json'}),'Pathfinder-debug-settings.json')}
+};
 function downloadBlob(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function downloadOutput(name){const item=state.outputs[name];if(!item?.stlData)return;downloadBlob(new Blob([item.stlData],{type:'model/stl'}),`${name}.stl`)}
 $('outputs').addEventListener('click',e=>{const n=e.target.dataset.download;if(n)downloadOutput(n)});$('downloadAll').onclick=async()=>{for(const n of Object.keys(state.outputs)){downloadOutput(n);await new Promise(r=>setTimeout(r,250))}};
 
 window.addEventListener('keydown',e=>{if(e.target.matches('input,select'))return;if(e.key==='w')document.querySelector('[data-mode=translate]').click();if(e.key==='e')document.querySelector('[data-mode=rotate]').click();if(e.key==='r')document.querySelector('[data-mode=scale]').click()});
 window.__PATHFINDER_APP_VERSION__='15.2.0';
-window.__PATHFINDER_INTERNALS__={optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
+window.__PATHFINDER_INTERNALS__={finalizePrintableHump,extraFootPillar,debugSettingsInfo,optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
 window.__PATHFINDER_STATE__=state;
 initLibrariesAndTemplate();
 </script>

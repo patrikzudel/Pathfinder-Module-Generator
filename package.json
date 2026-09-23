@@ -8,7 +8,8 @@
     "test:grip": "node tests/grip.mjs",
     "test:rendering": "node tests/rendering.mjs",
     "test:ui": "node tests/ui.mjs",
-    "test:server": "node tests/core-server.mjs"
+    "test:server": "node tests/core-server.mjs",
+    "test:skate": "node tests/rear-skate.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0"
