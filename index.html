@@ -1624,8 +1624,8 @@ function layoutGripTemplates(templates){
 }
 function gripPDF(templates){
   if(templates.some(t=>t.templateError))throw new Error('A grip template is unavailable. Refresh with a larger outline inset before downloading the PDF.');
-  const unit=72/25.4,objects=['','<< /Type /Catalog /Pages 2 0 R >>','', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'],pages=[];
-  const esc=s=>s.replace(/[\\()]/g,'\\$&'),num=n=>n.toFixed(5),label=(x,y,text,size=9)=>`BT /F1 ${size} Tf ${num(x*unit)} ${num(y*unit)} Td (${esc(text)}) Tj ET\n`;
+  const unit=72/25.4,objects=['','<< /Type /Catalog /Pages 2 0 R >>','', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>'],pages=[];
+  const esc=s=>s.replace(/[\\()]/g,'\\$&'),num=n=>n.toFixed(5),label=(x,y,text,size=9,font='F1')=>`BT /${font} ${size} Tf ${num(x*unit)} ${num(y*unit)} Td (${esc(text)}) Tj ET\n`;
   // Ruler paths are in millimeters, just like the cutting outlines. There is
   // no page-fit scale anywhere in layout or export.
   const rulers=()=>{
@@ -1636,8 +1636,18 @@ function gripPDF(templates){
     for(let tick=0;tick<=64;tick++){const x=15+tick*25.4/16,length=tick%16===0?5:tick%8===0?4:tick%4===0?3:tick%2===0?2:1;stream+=`${num(x)} 16 m ${num(x)} ${num(16+length)} l\n`}
     stream+='S Q\n';for(let cm=0;cm<=10;cm++)stream+=label(14+cm*10,43,String(cm),8);for(let inch=0;inch<=4;inch++)stream+=label(14+inch*25.4,23,String(inch),8);return stream;
   };
+  // Keep calibration guidance beside the rulers, outside the pattern area.
+  const calibrationBox=()=>`q ${unit} 0 0 ${unit} 0 0 cm 0.5 w 122 15 73 40 re S Q\n`
+    +label(125,49,'IMPORTANT: CHECK PRINT SIZE',9,'F2')
+    +label(125,44,'1. Print at 100% scale. Disable Fit to page.',8)
+    +label(125,40,'2. Measure from 0 to 10 cm on the ruler.',8)
+    +label(125,36,'3. If not 100 mm, calculate the scale:',8)
+    +label(125,31,'Scale (%) = 100 / measured mm x 100',8,'F2')
+    +label(125,27,'Example: 100 / 96.5 x 100 = 103.63%',8)
+    +label(125,22,'4. Round to a whole percent and reprint.',8)
+    +label(125,18,'5. Check the ruler again before cutting.',8);
   for(const layout of layoutGripTemplates(templates)){
-    let stream=label(15,282,'Pathfinder grip tape cutting templates',12)+label(15,275,'Print Actual size / 100%. Disable Fit to page. Check both rulers before cutting.')+label(15,269,'Surface-flattened contact patterns. Compound curves may require tape stretch.')+rulers();
+    let stream=label(15,282,'Pathfinder grip tape cutting templates',12)+label(15,275,'Print Actual size / 100%. Disable Fit to page. Check both rulers before cutting.')+label(15,269,'Surface-flattened contact patterns. Compound curves may require tape stretch.')+rulers()+calibrationBox();
     for(const item of layout){
       const {template:t,x,top,bottom,minX,minY,w,h,tile}=item;
       stream+=label(x,top,`${t.side} grip - ${t.depth} mm tape`)+label(x,top-5,`RMS ${t.rms.toFixed(2)}%; max ${t.max.toFixed(2)}% edge strain`,8)+label(x,top-10,tile?`Tile column ${tile.col+1}/${tile.columns}, row ${tile.row+1}/${tile.rows} (bottom up)`:`${w.toFixed(1)} x ${h.toFixed(1)} mm; backing ${t.backing??.8} mm`,8);
@@ -1647,7 +1657,7 @@ function gripPDF(templates){
       for(const loop of t.loops)stream+=loop.map((p,i)=>`${num(x+p[0]-minX-(tile?tile.col*tile.width:0))} ${num(bottom+p[1]-minY-(tile?tile.row*tile.height:0))} ${i?'l':'m'}`).join('\n')+'\nh S\n';
       stream+='Q\n';
     }
-    const contentID=objects.length;objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}endstream`);const pageID=objects.length;objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${210*unit} ${297*unit}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentID} 0 R >>`);pages.push(pageID);
+    const contentID=objects.length;objects.push(`<< /Length ${stream.length} >>\nstream\n${stream}endstream`);const pageID=objects.length;objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${210*unit} ${297*unit}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentID} 0 R >>`);pages.push(pageID);
   }
   objects[2]=`<< /Type /Pages /Count ${pages.length} /Kids [${pages.map(i=>i+' 0 R').join(' ')}] >>`;let pdf='%PDF-1.4\n',offsets=[0];for(let i=1;i<objects.length;i++){offsets.push(pdf.length);pdf+=`${i} 0 obj\n${objects[i]}\nendobj\n`}const xref=pdf.length;pdf+=`xref\n0 ${objects.length}\n0000000000 65535 f \n`+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;return new Blob([pdf],{type:'application/pdf'});
 }
