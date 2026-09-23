@@ -183,6 +183,7 @@
       <h2>3 · Preview and generate</h2>
       <div class="field"><label>Hump wall thickness</label><input id="wall" type="number" min="0.5" max="2.5" step="0.1" value="0.9"></div>
       <div class="field"><label>Side exterior projection detail</label><select id="projectionRes"><option value="0.25">High · 0.25 mm</option><option value="0.35" selected>Balanced · 0.35 mm</option><option value="0.50">Fast · 0.50 mm</option><option value="0.75">Draft · 0.75 mm</option></select></div>
+      <label class="check" title="Trim side material below the attachment tabs so they share a flat printing plane."><input id="optimizeFDM" type="checkbox" checked> Optimized for FDM Printing</label>
       <label class="check"><input id="symmetryMode" type="checkbox"> Symmetrical mouse mode</label>
       <div id="symmetryControls" class="field" style="display:none"><label>Primary side geometry</label><select id="symmetryPrimary"><option value="right" selected>Right side → mirror to left</option><option value="left">Left side → mirror to right</option></select></div>
       <div class="previewNote" style="margin-bottom:8px"><b>Side modules use an exterior-only side projection.</b> For every Y/Z location the app keeps only the first/outermost X hit seen from that side, then fills inward to make a clean Boundary Fill solid. Hidden scan junk, underside cavities and internal geometry cannot imprint onto the module. Symmetry mirrors this clean projected surface first, then still uses the real target-side Pathfinder cutter and plug.</div>
@@ -895,7 +896,7 @@ function clearGeometryGroup(group){
   group.traverse(object=>{object.geometry?.dispose();const materials=Array.isArray(object.material)?object.material:[object.material];materials.forEach(material=>material?.dispose())});group.clear();
 }
 function disposeManifold(m){if(state.kernelTrapped)return;try{m?.delete?.()}catch{}}
-function previewSignature(){if(!state.mouse)return '';const q=state.mouse.quaternion,p=state.mouse.position;return `${cacheKey()}|${p.x},${p.y},${p.z}|${q.x},${q.y},${q.z},${q.w}|side:${$('sideMode')?.value||'auto'}|sym:${$('symmetryMode')?.checked?'1':'0'}:${$('symmetryPrimary')?.value||'right'}|${$('addSkirt').checked?'skirt:'+JSON.stringify(skirtSettings()):'plain'}|grip:${JSON.stringify(['left','right'].map(gripSettings))}|simplify:${$('simplify').checked}`}
+function previewSignature(){if(!state.mouse)return '';const q=state.mouse.quaternion,p=state.mouse.position;return `${cacheKey()}|${p.x},${p.y},${p.z}|${q.x},${q.y},${q.z},${q.w}|fdm:${$('optimizeFDM').checked}|side:${$('sideMode')?.value||'auto'}|sym:${$('symmetryMode')?.checked?'1':'0'}:${$('symmetryPrimary')?.value||'right'}|${$('addSkirt').checked?'skirt:'+JSON.stringify(skirtSettings()):'plain'}|grip:${JSON.stringify(['left','right'].map(gripSettings))}|simplify:${$('simplify').checked}`}
 function invalidatePreview(rebuildModel=false){
   state.gripJob?.cancel();showGripWarnings([]);$('gripStatus').classList.remove('templateMetrics');$('gripPDF').disabled=true;setPreviewProgress(0,'Refresh the exact preview to apply changes.');
   clearTimeout(state.skirtRefreshTimer);state.skirtRefreshPending=false;
@@ -1264,6 +1265,19 @@ function solveSideBoundaryFill(prepared,wall){
   log(`Left Boundary Fill: ${describe(left,sources.leftSource)}`,'ok');log(`Right Boundary Fill: ${describe(right,sources.rightSource)}`,'ok');
   if(sources.symmetric)log(`Symmetrical mouse mode: ${sources.primary.toUpperCase()} side is primary. Its clean first-hit exterior projection is mirrored first; the opposite module still uses its own Pathfinder cutter and plug.`,'ok');
   return {left,right,sources};
+}
+// Crop only the mouse-derived body. The original target-side STEP plug is
+// joined afterwards, retaining every mating surface and defining the bed plane.
+function optimizeSideForFDM(body,plug,side){
+  if(!$('optimizeFDM').checked)return body;
+  const bottom=bboxArray(plug).min[2];
+  if(bboxArray(body).min[2]>=bottom)return body;
+  const trimmed=body.trimByPlane([0,0,1],bottom);
+  if(trimmed.isEmpty()||trimmed.status()!=='NoError'||componentCount(trimmed)!==1)
+    throw new Error(`${side} FDM bottom trim leaves no single valid side body. Adjust mouse alignment or disable Optimized for FDM Printing.`);
+  if(bboxArray(trimmed).min[2]<bottom-1e-5)
+    throw new Error(`${side} FDM bottom trim extends below the attachment plane.`);
+  return trimmed;
 }
 function tutorialHumpCrop(wall,rail){
   // Tutorial: thicken the hump surface, then CUT it with the supplied hump cutter. Because the upload is a complete mouse surface,
@@ -1677,7 +1691,8 @@ async function buildFitPreview(fitView=true){
     state.previewStats.builds++;const previewStart=performance.now();
     const prepared=await preparedGeometry();if(!prepared)return;setProgress(28);log('Preview: solving target-side Boundary Fill cells from the clean first-hit exterior projection envelopes…');await yieldFrame();
     if(signature!==previewSignature()||!state.preprocessReady)return;
-    const sideCells=cachedSideCells(prepared),left=sideCells.left.part,right=sideCells.right.part;
+    const cachedSides=cachedSideCells(prepared),left=optimizeSideForFDM(cachedSides.left.part,state.tools.leftPlug,'Left'),right=optimizeSideForFDM(cachedSides.right.part,state.tools.rightPlug,'Right');
+    const sideCells={...cachedSides,left:{...cachedSides.left,part:left},right:{...cachedSides.right,part:right}};
     setProgress(57);log('Preview: cutting the prebuilt hump wall with the supplied hump cutter…');await yieldFrame();
     if(signature!==previewSignature()||!state.preprocessReady)return;
     const sourceRail=state.tools.rearPlug,{railTrim,rail,chosen,hump}=cachedHump(prepared);
@@ -1695,6 +1710,8 @@ async function buildFitPreview(fitView=true){
     state.previewFits={left:lf.fit,right:rf.fit,rear:hf.fit,skirt:sf?.fit||null,safe};state.previewValid=lf.ready&&rf.ready&&hf.ready&&(!sf||sf.ready)&&safe.ok;
     if(state.previewValid){
       const modules={left:attachWithRootWeld(left,state.tools.leftPlug,'Left plug'),right:attachWithRootWeld(right,state.tools.rightPlug,'Right plug'),hump:attachWithRootWeld(hump,rail,'Rear rail',prepared.mouse)};
+      // Root-only bridges may slope downwards; keep them above the same bed plane.
+      for(const side of ['left','right'])modules[side]=optimizeSideForFDM(modules[side],state.tools[side+'Plug'],side);
       if(skirt){
         const maxVolume=modules.hump.volume()+skirt.volume();
         modules.hump=modules.hump.add(skirt);
@@ -1730,6 +1747,7 @@ $('projectionRes').addEventListener('change',async()=>{invalidatePreview(true);u
 function updateSymmetryUI(){const on=$('symmetryMode').checked;$('symmetryControls').style.display=on?'block':'none'}
 $('symmetryMode').addEventListener('change',()=>{updateSymmetryUI();invalidatePreview(false);scheduleLivePreview(40)});
 $('symmetryPrimary').addEventListener('change',()=>{invalidatePreview(false);scheduleLivePreview(40)});updateSymmetryUI();
+$('optimizeFDM').addEventListener('change',()=>{invalidatePreview(false);scheduleLivePreview(40)});
 $('sideMode').addEventListener('change',()=>{invalidatePreview(false);scheduleLivePreview(40)});
 $('livePreview').addEventListener('change',()=>{if($('livePreview').checked)scheduleLivePreview(40)});
 function clearOutputs(){clearGeometryGroup(state.outputGroup);state.outputs={};$('outputs').innerHTML='';$('downloadAll').disabled=true;refreshSceneVisibility()}
@@ -1790,7 +1808,7 @@ $('outputs').addEventListener('click',e=>{const n=e.target.dataset.download;if(n
 
 window.addEventListener('keydown',e=>{if(e.target.matches('input,select'))return;if(e.key==='w')document.querySelector('[data-mode=translate]').click();if(e.key==='e')document.querySelector('[data-mode=rotate]').click();if(e.key==='r')document.querySelector('[data-mode=scale]').click()});
 window.__PATHFINDER_APP_VERSION__='15.2.0';
-window.__PATHFINDER_INTERNALS__={previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
+window.__PATHFINDER_INTERNALS__={optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
 window.__PATHFINDER_STATE__=state;
 initLibrariesAndTemplate();
 </script>
