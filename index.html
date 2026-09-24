@@ -2,6 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <script>
+    // Run before stylesheets, external scripts, and CAD initialization.
+    window.__PATHFINDER_INTERRUPTED_STARTUP__=null;
+    try{
+      const marker='pathfinder-session-restore-pending';
+      window.__PATHFINDER_INTERRUPTED_STARTUP__=localStorage.getItem(marker);
+      if(window.__PATHFINDER_INTERRUPTED_STARTUP__){
+        localStorage.removeItem('pathfinder-session-settings');
+        localStorage.removeItem('pathfinder-ui-mode');
+      }
+      localStorage.setItem(marker,'restoring');
+    }catch{}
+  </script>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PatrikZero's Pathfinder Module Generator</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23f0ece3%22%2F%3E%3Cpath%20d%3D%22M32%207C19%207%2013%2017%2013%2030v8c0%2013%207%2020%2019%2020s19-7%2019-20v-8C51%2017%2045%207%2032%207Z%22%20fill%3D%22%2372571f%22%2F%3E%3Cpath%20d%3D%22M32%208v21M14%2030h36%22%20fill%3D%22none%22%20stroke%3D%22%23f0ece3%22%20stroke-width%3D%223%22%2F%3E%3Crect%20x%3D%2229%22%20y%3D%2215%22%20width%3D%226%22%20height%3D%2211%22%20rx%3D%223%22%20fill%3D%22%23f0ece3%22%2F%3E%3C%2Fsvg%3E" />
@@ -139,6 +152,11 @@
   <aside class="left" id="workflow" tabindex="-1" aria-label="Module workflow">
     <div class="section">
       <h2>1 · Load mouse model</h2>
+      <div class="row" style="margin-bottom:8px">
+        <button id="saveProject" type="button" title="Download the mouse, settings and cached preprocessing as a project file">Save Project</button>
+        <button id="loadProject" type="button" title="Open a saved project, replacing this session and reloading the app">Load Project</button>
+      </div>
+      <input id="projectInput" type="file" accept=".pathfinder" hidden />
       <button id="resetAll" type="button" class="danger" style="width:100%;margin-bottom:8px;background:var(--bad);border-color:var(--bad);color:#fffdf5">Reset all</button>
       <p id="sessionStatus" class="hint" role="status"></p>
       <div id="drop" class="drop" role="button" tabindex="0" aria-label="Choose a mouse model file"><div><strong>Drop an STL, OBJ, GLB or GLTF</strong><br><span class="small">or click to choose a file</span></div></div>
@@ -2014,11 +2032,11 @@ function sessionSettings(){
 }
 function saveSessionSettings(){
   // A transient startup/storage failure must not overwrite the saved model reference.
-  if(sessionRestoring||sessionResetting||!state.ready||(sessionExpectedModel&&!state.mouse))return;
+  if(sessionRestoring||sessionResetting||projectWorking||!state.ready||(sessionExpectedModel&&!state.mouse))return;
   try{localStorage.setItem(SESSION_SETTINGS_KEY,JSON.stringify(sessionSettings()))}catch(error){sessionStorageError(error)}
 }
 function scheduleSessionSettings(){
-  if(sessionRestoring||sessionResetting)return;
+  if(sessionRestoring||sessionResetting||projectWorking)return;
   clearTimeout(sessionSaveTimer);sessionSaveTimer=setTimeout(saveSessionSettings,150);
 }
 async function persistMouseSession(file){
@@ -2033,16 +2051,20 @@ async function persistMouseSession(file){
 }
 async function persistPreprocessing(){
   if(sessionRestoring||sessionResetting||!state.preprocessReady)return;
-  const cache=state.localCache;
-  const meshes=cache.meshes||{mouse:snapshotSolid(cache.mouse),wall:snapshotSolid(cache.wall),
-    ...Object.fromEntries(['plus','minus','mirrorPlusFromMinus','mirrorMinusFromPlus'].map(key=>[key,snapshotSolid(cache.sideProjection[key])]))};
-  const record={schema:PREPROCESS_SCHEMA,modelId:state.sessionModelId,key:cache.key,meshes,grid:cache.sideProjection.grid,wallVolume:cache.wallVolume,humpCache:state.humpCache};
+  const record=preprocessingRecord();
   $('sessionStatus').textContent='Saving preprocessed model…';
   try{
     await queueSessionWrite(store=>store.put(record,'preprocessing'));
     if(sessionResetting)return;
     saveSessionSettings();$('sessionStatus').textContent='Session and preprocessed model saved in this browser.';
   }catch(error){sessionStorageError(error)}
+}
+function preprocessingRecord(){
+  if(!state.preprocessReady)return null;
+  const cache=state.localCache;
+  const meshes=cache.meshes||{mouse:snapshotSolid(cache.mouse),wall:snapshotSolid(cache.wall),
+    ...Object.fromEntries(['plus','minus','mirrorPlusFromMinus','mirrorMinusFromPlus'].map(key=>[key,snapshotSolid(cache.sideProjection[key])]))};
+  return {schema:PREPROCESS_SCHEMA,modelId:state.sessionModelId,key:cache.key,meshes,grid:cache.sideProjection.grid,wallVolume:cache.wallVolume,humpCache:state.humpCache};
 }
 async function persistCoreSession(file){
   if(sessionRestoring||sessionResetting)return;
@@ -2052,6 +2074,118 @@ function clearSavedPreprocessing(){
   if(sessionRestoring||sessionResetting)return;
   queueSessionWrite(store=>store.delete('preprocessing')).catch(sessionStorageError);
 }
+// Store the existing session records with raw binary payloads: large mesh buffers
+// retain their exact types and do not expand into JSON arrays or base64 strings.
+const PROJECT_MAGIC='PFPJT001';
+const PROJECT_ARRAYS={Float32Array,Float64Array,Uint32Array,Int32Array,Uint16Array,Int16Array,Uint8Array,Int8Array,Uint8ClampedArray};
+function encodeProject(project){
+  const parts=[];let offset=0;
+  const json=JSON.stringify(project,(_key,value)=>{
+    if(value instanceof Blob||value instanceof ArrayBuffer||ArrayBuffer.isView(value)){
+      const blob=value instanceof Blob?value:new Blob([value]);
+      const ref={projectBinary:true,offset,length:blob.size,kind:value instanceof File?'File':value instanceof Blob?'Blob':value.constructor.name};
+      if(value instanceof Blob)ref.type=value.type;
+      if(value instanceof File){ref.name=value.name;ref.lastModified=value.lastModified}
+      offset+=blob.size;parts.push(blob);return ref;
+    }
+    return value;
+  });
+  const metadata=new TextEncoder().encode(json),header=new Uint8Array(12);
+  header.set(new TextEncoder().encode(PROJECT_MAGIC));new DataView(header.buffer).setUint32(8,metadata.length,true);
+  return new Blob([header,metadata,...parts],{type:'application/octet-stream'});
+}
+async function decodeProject(file){
+  const header=await file.slice(0,12).arrayBuffer();
+  if(header.byteLength!==12||new TextDecoder().decode(new Uint8Array(header,0,8))!==PROJECT_MAGIC)throw new Error('This is not a supported Pathfinder project file.');
+  const length=new DataView(header).getUint32(8,true),start=12+length;
+  if(start>file.size)throw new Error('The project file is truncated.');
+  const data=JSON.parse(await file.slice(12,start).text());
+  async function unpack(value){
+    if(!value||typeof value!=='object')return value;
+    if(value.projectBinary===true){
+      if(!Number.isSafeInteger(value.offset)||!Number.isSafeInteger(value.length)||value.offset<0||value.length<0||value.offset+value.length>file.size-start)throw new Error('Invalid project binary payload.');
+      const blob=file.slice(start+value.offset,start+value.offset+value.length,value.type||'');
+      if(value.kind==='File')return new File([blob],value.name,{type:value.type,lastModified:value.lastModified});
+      if(value.kind==='Blob')return blob;
+      const buffer=await blob.arrayBuffer();
+      if(value.kind==='ArrayBuffer')return buffer;
+      const Type=Object.hasOwn(PROJECT_ARRAYS,value.kind)&&PROJECT_ARRAYS[value.kind];
+      if(!Type||buffer.byteLength%Type.BYTES_PER_ELEMENT)throw new Error('Invalid project array type or length.');
+      return new Type(buffer);
+    }
+    for(const key of Object.keys(value))value[key]=await unpack(value[key]);
+    return value;
+  }
+  const project=await unpack(data);
+  if(project?.format!=='pathfinder-project'||project.version!==1||project.settings?.schema!==SESSION_SCHEMA||!project.settings.controls)throw new Error('Unsupported project version or missing settings.');
+  if(project.settings.modelId&&(!project.model||project.model.id!==project.settings.modelId||!(project.model.file instanceof Blob)||typeof project.model.metadata?.name!=='string'))throw new Error('The project is missing its mouse model.');
+  if(project.core!=null&&!(project.core instanceof Blob))throw new Error('Invalid assembly model in project.');
+  if(project.preprocessing&&(project.preprocessing.schema!==PREPROCESS_SCHEMA||project.preprocessing.modelId!==project.settings.modelId))throw new Error('The project preprocessing is incompatible.');
+  return project;
+}
+let projectWorking=false;
+async function withProjectControls(action){
+  if(projectWorking||sessionRestoring||sessionResetting||!state.ready)return;
+  if(state.busy||state.preprocessPromise||state.gripJob||state.positioning){$('sessionStatus').textContent='Wait for the current operation to finish before saving or loading a project.';return}
+  projectWorking=true;clearTimeout(sessionSaveTimer);clearTimeout(state.livePreviewTimer);
+  lockSessionControls(true);$('resetAll').disabled=true;
+  const wasBusy=state.busy;state.busy=true;
+  try{await action()}catch(error){$('sessionStatus').textContent='Project operation failed: '+error.message;log($('sessionStatus').textContent,'error')}
+  finally{state.busy=wasBusy;projectWorking=false;lockSessionControls(false);$('resetAll').disabled=false;updatePreprocessButton()}
+}
+async function saveProject(){
+  await withProjectControls(async()=>{
+    $('sessionStatus').textContent='Preparing project file…';await yieldFrame();
+    await sessionWrites;
+    const settings=sessionSettings();
+    const [model,core,savedPreprocessing]=await Promise.all(['model','core','preprocessing'].map(key=>sessionTransaction('readonly',store=>store.get(key))));
+    if(settings.modelId&&model?.id!==settings.modelId)throw new Error('The current mouse has not been saved in browser storage. Import it again before saving a project.');
+    // A rotated mouse may still reuse its hump wall after rebuilding side projections.
+    const preprocessing=preprocessingRecord()||(state.humpCache&&savedPreprocessing?.modelId===settings.modelId?{...savedPreprocessing,humpCache:state.humpCache}:null);
+    const project={format:'pathfinder-project',version:1,settings,model:settings.modelId?model:null,core:settings.coreSaved?core:null,preprocessing};
+    const name=(state.modelFile?.name||'Pathfinder').replace(/\.[^.]+$/,'');
+    downloadBlob(encodeProject(project),name+'.pathfinder');
+    $('sessionStatus').textContent='Project downloaded with settings, mouse and available preprocessing.';
+  });
+}
+async function loadProject(file){
+  await withProjectControls(async()=>{
+    $('sessionStatus').textContent='Checking project file…';await yieldFrame();
+    const project=await decodeProject(file);
+    // Validate cached solids before replacing the saved session.
+    if(project.preprocessing){
+      const record=project.preprocessing;
+      for(const key of ['mouse','wall','plus','minus','mirrorPlusFromMinus','mirrorMinusFromPlus']){
+        const solid=restoreSolid(record.meshes?.[key]);disposeManifold(solid);
+      }
+      if(record.humpCache)for(const key of ['mouse','wall']){const solid=restoreSolid(record.humpCache[key]);disposeManifold(solid)}
+    }
+    if(project.model){
+      const geometry=await parseMouse(new File([project.model.file],project.model.metadata.name));
+      if(!geometry.getAttribute('position')?.count){geometry.dispose();throw new Error('The project mouse mesh is empty.')}
+      geometry.dispose();
+    }
+    await sessionWrites;
+    const previousSettings=localStorage.getItem(SESSION_SETTINGS_KEY);
+    const keys=['model','core','preprocessing'];
+    const previous=await Promise.all(keys.map(key=>sessionTransaction('readonly',store=>store.get(key))));
+    // Roll back records if committing settings fails.
+    try{
+      await queueSessionWrite(store=>{for(const key of keys){store.delete(key);if(project[key]!=null)store.put(project[key],key)}});
+      localStorage.setItem(SESSION_SETTINGS_KEY,JSON.stringify(project.settings));
+      localStorage.removeItem(SESSION_RESTORE_MARKER);
+    }catch(error){
+      await queueSessionWrite(store=>{keys.forEach((key,i)=>{store.delete(key);if(previous[i]!=null)store.put(previous[i],key)})});
+      if(previousSettings===null)localStorage.removeItem(SESSION_SETTINGS_KEY);else localStorage.setItem(SESSION_SETTINGS_KEY,previousSettings);
+      throw error;
+    }
+    sessionResetting=true; // Prevent pagehide from overwriting the imported settings.
+    $('sessionStatus').textContent='Project loaded. Reloading…';location.reload();
+  });
+}
+$('saveProject').onclick=saveProject;
+$('loadProject').onclick=()=>$('projectInput').click();
+$('projectInput').onchange=()=>{const file=$('projectInput').files[0];$('projectInput').value='';if(file)loadProject(file)};
 function applySavedControls(controls){
   for(const [id,value] of Object.entries(controls||{})){
     const input=$(id);
@@ -2070,19 +2204,15 @@ function lockSessionControls(locked){
 async function restoreSession(){
   if(sessionResetting)return;
   try{
-    const interrupted=localStorage.getItem(SESSION_RESTORE_MARKER);
+    const interrupted=window.__PATHFINDER_INTERRUPTED_STARTUP__;
     if(interrupted){
+      // The early startup script already quarantined the old session.
       // Do not open IndexedDB here: it may be the operation that hung.
-      // Removing the settings reference quarantines the old model/cache.
-      localStorage.removeItem(SESSION_SETTINGS_KEY);localStorage.removeItem('pathfinder-ui-mode');
-      localStorage.removeItem(SESSION_RESTORE_MARKER);setUIMode('simple');
+      setUIMode('simple');
       $('sessionStatus').textContent=interrupted==='reset'?'Session reset. Import a model to begin.':'The previous restore was interrupted. Started fresh; import your model again.';
       log($('sessionStatus').textContent,'warning');return;
     }
     const raw=localStorage.getItem(SESSION_SETTINGS_KEY);if(!raw)return;
-    // A synchronous freeze cannot run a timeout. This durable marker lets the
-    // NEXT load recover even if this page never reaches its cleanup code.
-    localStorage.setItem(SESSION_RESTORE_MARKER,'restoring');
     const saved=JSON.parse(raw);if(saved.schema!==SESSION_SCHEMA)return;
     sessionExpectedModel=saved.modelId;
     $('sessionStatus').textContent='Restoring saved session…';
@@ -2134,7 +2264,7 @@ async function restoreSession(){
       // Include the first rendered frames in the guarded startup.
       await yieldFrame();await yieldFrame();
       if(!sessionResetting){
-        try{localStorage.removeItem(SESSION_RESTORE_MARKER)}catch{}
+        try{if(state.ready)localStorage.removeItem(SESSION_RESTORE_MARKER)}catch{}
         sessionRestoring=false;state.sessionReady=true;lockSessionControls(false);saveSessionSettings();
       }
     }
