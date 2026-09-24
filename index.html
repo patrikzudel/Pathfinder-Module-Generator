@@ -1959,10 +1959,17 @@ function validateSTLRoundTrip(name,sourceManifold,stlData){
 function addOutput(name,manifold,color){
   const result=manifold;
   const geometry=manifoldToGeometry(result),mesh=new THREE.Mesh(geometry,moduleMaterial(color));mesh.name=name;
-  const exporter=new STLExporter(),stlData=exporter.parse(mesh,{binary:true}),verified=validateSTLRoundTrip(name,result,stlData);
+  // Keep assembly geometry in place; rotate the complete hump only for printing.
+  const exportSolid=name==='Pathfinder_Hump'?result.rotate([90,0,0]):result;
+  let stlData,verified,bounds;
+  try{
+    stlData=exportSolid===result?new STLExporter().parse(mesh,{binary:true}):binarySTLForSolid(exportSolid);
+    verified=validateSTLRoundTrip(name,exportSolid,stlData);bounds=bboxArray(exportSolid);
+  }catch(error){geometry.dispose();mesh.material.dispose();throw error}
+  finally{if(exportSolid!==result)disposeManifold(exportSolid)}
   state.outputGroup.add(mesh);state.outputs[name]={manifold:result,mesh,stlData,verified};refreshSceneVisibility();
-  const b=new THREE.Box3().setFromObject(mesh),s=b.getSize(new THREE.Vector3()),tri=geometry.index.count/3,vol=result.volume();
-  const card=document.createElement('div');card.className='outputCard';card.innerHTML=`<h3>${name}</h3><div class="meta">${formatNum(tri,0)} triangles · ${formatNum(vol,1)} mm³<br>${formatNum(s.x)} × ${formatNum(s.y)} × ${formatNum(s.z)} mm<br>STL re-import verified · ΔV ${formatNum(verified.delta*100,3)}%</div><button data-download="${name}">Download STL</button>`;$('outputs').appendChild(card);
+  const size=bounds.max.map((v,i)=>v-bounds.min[i]),tri=geometry.index.count/3,vol=result.volume();
+  const card=document.createElement('div');card.className='outputCard';card.innerHTML=`<h3>${name}</h3><div class="meta">${formatNum(tri,0)} triangles · ${formatNum(vol,1)} mm³<br>${size.map(v=>formatNum(v)).join(' × ')} mm${name==='Pathfinder_Hump'?'<br>STL rotated 90° around X':''}<br>STL re-import verified · ΔV ${formatNum(verified.delta*100,3)}%</div><button data-download="${name}">Download STL</button>`;$('outputs').appendChild(card);
 }
 function attachmentRetention(module,attachment){
   const av=Math.abs(Number(attachment.volume())||0);if(av<1e-6)return 1;let kept=0;try{kept=Math.abs(Number(module.intersect(attachment).volume())||0)}catch(e){if(isFatalKernelError(e))throw e}return kept/av;
