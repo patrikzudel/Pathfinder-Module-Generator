@@ -236,9 +236,12 @@
           <p class="hint">Default −0.60 mm assumes the supplied V2 foot underside at Z=0.20 mm with 0.80 mm skates. Match this plane to the bottom of your installed Pathfinder skates; it is a reference setting, not a measurement of your core.</p>
         </details>
         <button id="resetSkirt">Reset foot Y</button>
-        <h3>Extra circular feet</h3><div id="extraFeet"></div>
+        <h3>Extra circular feet</h3>
+        <div class="field"><label for="skirtConnections">Foot connections</label><select id="skirtConnections"><option value="direct">Direct to rear foot</option><option value="nearest" selected>Sequential · nearest feet</option></select></div>
+        <p class="hint advancedOnly">Direct connects every circular foot to the main rear foot. Sequential links nearby feet with the shortest total arm length, keeping them all connected to the rear foot.</p>
+        <div id="extraFeet"></div>
         <button id="addExtraFoot" type="button">Add circular foot</button>
-        <p class="hint advancedOnly">Place extra feet with world X/Y coordinates in millimeters (positive Y is rearward). They use the dot dimensions above and the same automatic skate height. Each seat has a 1 mm rim, a straight arm to the rear foot, and a square vertical pillar up to the hump. Place the entire pillar beneath the hump. Gold outlines update immediately; click Refresh Preview to build and validate the supports. Check core clearance in assembly preview before printing.</p>
+        <p class="hint advancedOnly">Place extra feet with world X/Y coordinates in millimeters (positive Y is rearward). They use the dot dimensions above and the same automatic skate height. Each seat has a 1 mm rim, a straight connecting arm, and a square vertical pillar up to the hump. Sequential connections are calculated from distances, not the order feet were added; separate groups can branch from the rear foot. Place the entire pillar beneath the hump. Gold outlines update immediately; click Refresh Preview to build and validate the supports. Check core clearance in assembly preview before printing.</p>
         <p id="skirtHeight" class="hint advancedOnly"></p>
         <p class="hint advancedOnly">Enter your skate dots’ dimensions. The foot stays at skate height; two vertical pillars connect directly to the underside of the Pathfinder rear rails. The foot stays centered on X. Move Y to place the pillars beneath the rails and the dots under the rear overhang. Gold = foot and pillars; green = rail connection; charcoal = purchased dots; blue = pad plane; red = printed plastic conflicting with the pad clearance or dots. Guides and dots are not exported.</p>
         <p id="skirtContact" class="hint advancedOnly" role="status">Refresh the exact preview to build the rear skate support.</p>
@@ -1345,12 +1348,13 @@ function cropSafety(leftChoice,rightChoice,hump,humpWall,mouse,sources){
   problems.push(...humpRegionProblems(hump,humpWall));
   return {ok:!problems.length,problems,lm,rm,hm};
 }
-const SKIRT_DEFAULTS={x:0,y:0,rib:2,diameter:6,thickness:.8,padZ:-.6,minClearance:.2};
+const SKIRT_DEFAULTS={x:0,y:0,rib:2,diameter:6,thickness:.8,padZ:-.6,minClearance:.2,connections:'nearest'};
 const SKIRT_FIELDS={y:'skirtY',rib:'skirtRib',diameter:'skateDiameter',thickness:'skateThickness',padZ:'skirtPadZ',minClearance:'skirtClearance'};
-function skirtSettings(){return {...(state.skirtSettings||SKIRT_DEFAULTS),x:0,extraFeet:(state.extraFeet||[]).map(p=>({...p}))}}
+function skirtSettings(){return {...SKIRT_DEFAULTS,...state.skirtSettings,x:0,extraFeet:(state.extraFeet||[]).map(p=>({...p}))}}
 function skirtOffset(){const s=skirtSettings(),z=state.tools.skirt?bboxArray(state.tools.skirt).min[2]:.2;return [s.x,s.y,s.padZ+s.thickness-z]}
 function updateSkirtPlacementUI(){
   const s=skirtSettings();$('skirtControls').style.display=$('addSkirt').checked?'block':'none';
+  $('skirtConnections').value=s.connections;
   state.toolGroups.skirt?.position.fromArray(skirtOffset());
   $('skirtHeight').textContent=`Foot underside Z=${formatNum(s.padZ+s.thickness,2)} mm · dot bottoms / pad Z=${formatNum(s.padZ,2)} mm. Height is calculated, not freely movable.`;
 }
@@ -1358,10 +1362,11 @@ function skirtSettingsChanged(){
   const settings=Object.fromEntries(Object.entries(SKIRT_FIELDS).map(([key,id])=>[key,Number($(id).value)]));
   const valid=Object.values(settings).every(Number.isFinite)&&settings.rib>=1&&settings.rib<=3&&settings.diameter>=1&&settings.diameter<=12&&settings.thickness>=.1&&settings.thickness<=3&&settings.minClearance>=.05&&settings.minClearance<=3&&Object.values(SKIRT_FIELDS).every(id=>$(id).value!=='');
   if(!valid){for(const [key,id] of Object.entries(SKIRT_FIELDS))$(id).value=skirtSettings()[key];updateSkirtPlacementUI();log('Enter valid foot offsets, 1–3 mm pillars, 1–12 mm dots and 0.1–3 mm skate thickness and 0.05–3 mm clearance.','warning');return}
-  state.skirtSettings={...settings,x:0};updateSkirtPlacementUI();invalidatePreview(false);
+  state.skirtSettings={...settings,x:0,connections:$('skirtConnections').value==='nearest'?'nearest':'direct'};updateSkirtPlacementUI();invalidatePreview(false);
   clearTimeout(state.livePreviewTimer);updateExtraFootGuides();
 }
 for(const id of Object.values(SKIRT_FIELDS))$(id).addEventListener('change',skirtSettingsChanged);
+$('skirtConnections').addEventListener('change',skirtSettingsChanged);
 $('resetSkirt').onclick=()=>{$('skirtY').value=0;skirtSettingsChanged()};
 function updateExtraFootGuides(){
   if(!state.extraFootGuides){state.extraFootGuides=new THREE.Group();state.extraFootGuides.name='Circular foot placement outlines';scene.add(state.extraFootGuides)}
@@ -1380,6 +1385,13 @@ function updateExtraFootGuides(){
     const points=[[-r,-r],[r,-r],[r,r],[-r,r]].map(([dx,dy])=>new THREE.Vector3(x+dx,y+dy,height));
     const line=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xffb020,depthTest:false,depthWrite:false}));
     line.name='Square pillar roof detection start';line.renderOrder=25;group.add(line);
+  }
+  for(const {from:[ax,ay],to:[x,y],length} of extraFootConnections(settings)){
+    if(length<=1e-6)continue;
+    const dx=-(y-ay)/length*settings.rib/2,dy=(x-ax)/length*settings.rib/2;
+    const points=[[ax+dx,ay+dy],[x+dx,y+dy],[x-dx,y-dy],[ax-dx,ay-dy]].map(([px,py])=>new THREE.Vector3(px,py,z));
+    const line=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xffb020,depthTest:false,depthWrite:false,transparent:true,opacity:.9}));
+    line.name='Circular foot connecting arm';line.renderOrder=25;group.add(line);
   }
 }
 function renderExtraFeet(){
@@ -1409,6 +1421,27 @@ function skirtDotCenters(settings){
   // Two seats on the centerline of the original V2 annular foot, away from
   // its rounded ends. Their footprints are checked against the actual foot.
   return [70,110].map(degrees=>{const angle=degrees*Math.PI/180;return {angle:degrees,xy:[28.9*Math.cos(angle),settings.y+35+28.9*Math.sin(angle)]}});
+}
+function validExtraFoot({x,y,detectionHeight=0}){return Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(detectionHeight)&&detectionHeight>=0}
+function extraFootConnections(settings){
+  const roots=skirtDotCenters(settings).map(({xy:[x,y]})=>({x,y,index:null}));
+  const nodes=(settings.extraFeet||[]).map((foot,index)=>({...foot,index})).filter(validExtraFoot);
+  const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const link=(node,parent)=>({index:node.index,parentIndex:parent.index,from:[parent.x,parent.y],to:[node.x,node.y],length:distance(node,parent)});
+  if(settings.connections!=='nearest')return nodes.map(node=>link(node,roots.reduce((a,b)=>distance(node,a)<=distance(node,b)?a:b)));
+  // Prim's minimum spanning tree, with the two V2 seats already connected.
+  // Coordinate ordering breaks ties consistently when the UI list is reordered.
+  const order=(a,b)=>a.x-b.x||a.y-b.y;
+  roots.sort(order);nodes.sort(order);
+  const pending=nodes.map(node=>({node,parent:roots.reduce((a,b)=>distance(node,a)<=distance(node,b)?a:b)}));
+  const connections=[];
+  while(pending.length){
+    let best=0;
+    for(let i=1;i<pending.length;i++)if(distance(pending[i].node,pending[i].parent)<distance(pending[best].node,pending[best].parent))best=i;
+    const {node,parent}=pending.splice(best,1)[0];connections.push(link(node,parent));
+    for(const candidate of pending)if(distance(candidate.node,node)<distance(candidate.node,candidate.parent))candidate.parent=node;
+  }
+  return connections;
 }
 // V2 rail base: Z=12, outer X=±12.8. The centered foot carries straight
 // pillars at X=±12, beneath the base flange rather than beside the upper rail.
@@ -1463,12 +1496,17 @@ function buildSkateFoot(hump,rail,sourceFoot=state.tools.skirt,settings=skirtSet
     result.supports.push(rib);result.skirt=result.skirt.add(rib);
   }
   result.extraFeet=[];result.extraPillars=[];result.humpContacts=[];
-  for(const [index,{x,y,detectionHeight=0}] of (settings.extraFeet||[]).entries()){
-    if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(detectionHeight)||detectionHeight<0){result.issues.push(`Circular foot ${index+1} has an invalid position.`);continue}
+  const seats=new Map();result.connections=extraFootConnections(settings);
+  for(const [index,foot] of (settings.extraFeet||[]).entries())if(!validExtraFoot(foot))result.issues.push(`Circular foot ${index+1} has an invalid position.`);
+  // Connections are ordered from the rear foot outward, so every new arm has
+  // a previously joined parent seat. Validate that seat instead of requiring
+  // every extra foot to intersect the original V2 foot directly.
+  for(const {index,parentIndex,from:[ax,ay],length} of result.connections){
+    const {x,y,detectionHeight=0}=settings.extraFeet[index];
     const radius=settings.diameter/2,z=fb.min[2],height=fb.max[2]-z;
-    const anchors=skirtDotCenters(settings).map(seat=>seat.xy).sort((a,b)=>Math.hypot(x-a[0],y-a[1])-Math.hypot(x-b[0],y-b[1]));
-    const [ax,ay]=anchors[0],dx=x-ax,dy=y-ay,length=Math.hypot(dx,dy);
+    const dx=x-ax,dy=y-ay;
     const seat=M.cylinder(height,radius+1,radius+1,64).translate([x,y,z]);
+    seats.set(index,seat);
     const arm=length>1e-6?M.cube([length,settings.rib,height]).translate([0,-settings.rib/2,0]).rotate([0,0,Math.atan2(dy,dx)*180/Math.PI]).translate([ax,ay,z]):seat;
     let extra=seat.add(arm);
     try{
@@ -1478,7 +1516,8 @@ function buildSkateFoot(hump,rail,sourceFoot=state.tools.skirt,settings=skirtSet
     }catch(error){result.issues.push(`Circular foot ${index+1}: ${error.message}.`)}
     const dot=M.cylinder(settings.thickness,radius,radius,64).translate([x,y,settings.padZ]);
     result.dots.push(dot);result.extraFeet.push(extra);
-    if(extra.status()!=='NoError'||componentCount(extra)!==1||extra.intersect(foot).volume()<.01)result.issues.push(`Circular foot ${index+1} could not connect to the rear foot. Adjust its X/Y position.`);
+    const parentSeat=parentIndex===null?foot:seats.get(parentIndex);
+    if(extra.status()!=='NoError'||componentCount(extra)!==1||!parentSeat||extra.intersect(parentSeat).volume()<.01)result.issues.push(`Circular foot ${index+1} could not connect to ${parentIndex===null?'the rear foot':`circular foot ${parentIndex+1}`}. Adjust its X/Y position.`);
     if(extra.intersect(keepout).volume()>1e-4)result.issues.push(`Circular foot ${index+1} obstructs the Pathfinder rail clearance.`);
     const seatTest=M.cylinder(.1,radius,radius,64).translate([x,y,z+.01]);
     if(seatTest.intersect(extra).volume()<seatTest.volume()*.999)result.issues.push(`Circular foot ${index+1} does not fully support its dot.`);
@@ -1985,7 +2024,7 @@ $('outputs').addEventListener('click',e=>{const n=e.target.dataset.download;if(n
 
 window.addEventListener('keydown',e=>{if(e.target.matches('input,select'))return;if(e.key==='w')document.querySelector('[data-mode=translate]').click();if(e.key==='e')document.querySelector('[data-mode=rotate]').click();if(e.key==='r')document.querySelector('[data-mode=scale]').click()});
 window.__PATHFINDER_APP_VERSION__='15.2.0';
-window.__PATHFINDER_INTERNALS__={sessionSettings,persistPreprocessing,saveSessionSettings,finalizePrintableHump,extraFootPillar,debugSettingsInfo,optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
+window.__PATHFINDER_INTERNALS__={sessionSettings,persistPreprocessing,saveSessionSettings,finalizePrintableHump,extraFootPillar,debugSettingsInfo,optimizeSideForFDM,previewIsCurrent,currentPreviewVisible,updatePreviewActions,showGripWarnings,smoothGripBoundary,gripAdjustmentNotice,layoutGripTemplates,snapshotSolid,gripFootprint,gripOffsets,flattenGrip,gripPDF,gripProject,applyGrip,physicalComponentInfo,validateHumpRegion,rearRailMatingKeepout,buildSkateFoot,extraFootConnections,skirtDotCenters,skirtSettings,skirtOffset,showSkirtContact,centerAndGroundMouse,sensorOrigin,handleMouseTransformChange,syncTransformFields,previewGeometry,addOutput,buildInnerOffset,recoverKernel,threeGeometryToManifold,manifoldToGeometry,buildPathfinderV2HumpSkirt,verifySkirtAgainstStepVisual,vec3Array,bboxArray,localIntersection,normalizedDirection,componentCount,extractOuterEnvelope,keepBestComponent,attachmentFit,rootSlab,attachWithRootWeld,cacheKey,poseMatrix,previewSignature,cropMetrics,cropSafety,rasterizeExteriorProjection,projectedEnvelopeGeometry,buildExteriorProjectionCache,sideEnvelopeAssignment,sideCellFamilies,evaluateSideCell,solveSideBoundaryFill,pickRearHumpComponent,tutorialHumpCrop,preprocessSelectedSurface,attachmentRetention,trimRearRailToOuterMouse,trimHumpRailSafely,validateSTLRoundTrip,stlArrayBuffer,addFitGuide,corePreviewActive,fitCoreAssembly,refreshSceneVisibility,loadPathfinderCore};
 window.__PATHFINDER_STATE__=state;
 // Bump this when preprocessing geometry or its coordinate convention changes.
 const SESSION_SCHEMA=1,PREPROCESS_SCHEMA='exterior-projection-hump-v1';
